@@ -24,6 +24,7 @@ package pingo
 
 import (
 	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -39,7 +40,10 @@ import (
 	"time"
 )
 
+// Constants
 const (
+
+	// Method constants
 	GET    method = http.MethodGet
 	HEAD   method = http.MethodHead
 	POST   method = http.MethodPost
@@ -48,63 +52,98 @@ const (
 	DELETE method = http.MethodDelete
 )
 
+// Types
 type (
-	option func(c *client)
+
+	// Method type
 	method string
 
+	// Option function that sets options on the client
+	option func(c *client)
+
+	// Client options
 	Options struct {
-		BaseUrl     string
-		Timeout     time.Duration
-		Logf        func(string, ...any)
-		Debug       bool
-		Client      http.Client
-		Headers     http.Header
-		QueryParams map[string]any
+		BaseUrl     string               // Base URL for the client
+		Timeout     time.Duration        // Client timeout
+		Logf        func(string, ...any) // Logger function
+		Debug       bool                 // Debug mode
+		Client      *http.Client         // http.Client that the client will use
+		Headers     http.Header          // Client headers
+		QueryParams url.Values           // Client query parameters
 	}
 
+	// Request option function that sets options on the request
+	requestOption func(r *requestOptions)
+
+	// Request options
+	requestOptions struct {
+		gzip                 bool // Whether the response is gzipped or not
+		overwriteHeaders     bool // Whether to overwrite existing headers
+		overwriteQueryParams bool // Whether to overwrite existing query parameters
+	}
+
+	// request struct holds necessary data for a request
 	request struct {
-		Method      method
-		Path        string
-		Headers     http.Header
-		QueryParams map[string]any
-		data        []byte
+		Method      method      // Method of the request
+		Path        string      // Path of the request
+		Headers     http.Header // Headers of the request
+		QueryParams url.Values  // Query parameters of the request
+		data        []byte      // Request data
 	}
 
+	// response struct holds the necessary data for a response
 	response struct {
-		processResp func([]byte, int, http.Header) error
-		data        any
-		statusCode  int
-		headers     http.Header
+		processResp func([]byte, int, http.Header) error // A function that processes the request and sets the field values
+		data        any                                  // Response data
+		statusCode  int                                  // Response status code
+		headers     http.Header                          // Response headers
 	}
 
+	// client struct holds the necessary data for the client
 	client struct {
-		client      http.Client
-		baseUrl     string
-		timeout     time.Duration
-		logf        func(string, ...any)
-		debug       bool
-		headers     http.Header
-		queryParams map[string]any
+		client      *http.Client         // http.Client
+		baseUrl     string               // Base URL
+		timeout     time.Duration        // Timeout
+		logf        func(string, ...any) // Logger function
+		debug       bool                 // Debug mode
+		headers     http.Header          // Headers
+		queryParams url.Values           // Query parameters
 	}
 
-	ClientError struct {
-		Response   []byte
-		StatusCode int
-		Headers    http.Header
+	// ErrorResponse struct holds the necessary data when an error response is received.
+	// A response is considered to be an error when the status code is not between 200 and 299 (inclusive).
+	ErrorResponse struct {
+		Response   []byte      // Response content
+		StatusCode int         // Status code
+		Headers    http.Header // Response headers
 	}
 )
 
-// Client  -------------------------------------------------
+// Client  --------------------------------------------------------------------
 
+// NewClient creates a new client with the given options
 func NewClient(opts ...option) *client {
 	c := client{}
+	c.defaults()
 	SetOptions(&c, opts...)
 	return &c
 }
 
-func (c *client) Request(req *request, res *response) error {
+// defaults sets the default values for the client
+func (c *client) defaults() {
+	c.client = &http.Client{}
+	c.logf = log.Printf
+}
+
+// Request performs a request with the given request and options and sets the response with the result. Upon an error a non nil error is returned.
+// A response with a status code that is not between 200 and 299 (inclusive) also considered as an error.
+func (c *client) Request(req *request, res *response, opts ...requestOption) error {
 	start := time.Now()
 
+	// Set options
+	options := initRequestOptions(opts...)
+
+	// Create request URL
 	requestUrl := path.Join(c.baseUrl, req.Path)
 	if c.debug {
 		c.logf("[REQUEST] %s: %s\n", req.Method, requestUrl)
@@ -114,6 +153,7 @@ func (c *client) Request(req *request, res *response) error {
 		c.logf("%s %s %s", req.Method, requestUrl, time.Since(start))
 	}()
 
+	// Create body
 	var reqBody io.Reader
 	if req.data != nil && len(req.data) > 0 {
 		reqBody = bytes.NewBuffer(req.data)
@@ -122,26 +162,41 @@ func (c *client) Request(req *request, res *response) error {
 		}
 	}
 
+	// Create request
 	request, err := http.NewRequest(string(req.Method), requestUrl, reqBody)
 	if err != nil {
 		return err
 	}
 
+	// Set headers
 	request.Header = c.headers
 	for k, v := range req.Headers {
-		if len(v) > 0 {
-			request.Header.Set(k, v[0])
+		for _, v2 := range v {
+			if options.overwriteHeaders {
+				request.Header.Set(k, v2)
+			} else {
+				request.Header.Add(k, v2)
+			}
 		}
 	}
 
+	// Set query parameters
 	query := request.URL.Query()
 	for k, v := range c.queryParams {
-		query.Set(k, fmt.Sprint(v))
+		for _, v2 := range v {
+			query.Add(k, v2)
+		}
 	}
 
 	if req.QueryParams != nil {
 		for k, v := range req.QueryParams {
-			query.Set(k, fmt.Sprint(v))
+			for _, v2 := range v {
+				if options.overwriteQueryParams {
+					query.Set(k, v2)
+				} else {
+					query.Add(k, v2)
+				}
+			}
 		}
 	}
 
@@ -153,9 +208,8 @@ func (c *client) Request(req *request, res *response) error {
 		c.logf("[REQUEST] %s\n", dump)
 	}
 
-	cl := c.client
-
-	response, err := cl.Do(request)
+	// Do the request
+	response, err := c.client.Do(request)
 	if err != nil {
 		return err
 	}
@@ -166,29 +220,49 @@ func (c *client) Request(req *request, res *response) error {
 		c.logf("[RESPONSE] %s\n", dump)
 	}
 
+	// Read response body
 	resBody, err := ioutil.ReadAll(response.Body)
 	if err != nil {
 		return err
 	}
 
+	// Process gzipped response if it was set in the options
+	if options.gzip {
+		gr, err := gzip.NewReader(bytes.NewBuffer(resBody))
+		if err != nil {
+			return err
+		}
+		defer gr.Close()
+
+		resBody, err = ioutil.ReadAll(gr)
+		if err != nil {
+			return err
+		}
+	}
+
+	// Return error if a bad status code is returned
 	if response.StatusCode < 200 || response.StatusCode > 299 {
-		return ClientError{
+		return ErrorResponse{
 			Response:   resBody,
 			StatusCode: response.StatusCode,
 			Headers:    response.Header,
 		}
 	}
 
+	// Process and set response
 	return res.processResp(resBody, response.StatusCode, response.Header)
 }
 
-// Request -------------------------------------------------
+// Request --------------------------------------------------------------------
+
+// NewRawRequest creates a new raw request
 func NewRawRequest(data []byte) *request {
 	return &request{
 		data: data,
 	}
 }
 
+// NewJsonRequest creates a new json request
 func NewJsonRequest(data any) (*request, error) {
 	jsonData, err := json.Marshal(data)
 	if err != nil {
@@ -204,6 +278,7 @@ func NewJsonRequest(data any) (*request, error) {
 	}, nil
 }
 
+// NewFormRequest creates a new form request
 func NewFormRequest(data any) (*request, error) {
 	values, err := createUrlValues(data)
 	if err != nil {
@@ -219,19 +294,24 @@ func NewFormRequest(data any) (*request, error) {
 	}, nil
 }
 
-// Response ------------------------------------------------
+// Response -------------------------------------------------------------------
+
+// Data returns the parsed response data
 func (r *response) Data() any {
 	return r.data
 }
 
+// Headers returns the response headers
 func (r *response) Headers() http.Header {
 	return r.headers
 }
 
+// StatusCode returns the status code of the response
 func (r *response) StatusCode() int {
 	return r.statusCode
 }
 
+// NewRawResponse creates a new raw response
 func NewRawResponse() *response {
 	r := response{}
 	r.processResp = func(res []byte, statusCode int, headers http.Header) error {
@@ -244,6 +324,7 @@ func NewRawResponse() *response {
 	return &r
 }
 
+// NewJsonResponse creates a new json response
 func NewJsonResponse(data any) *response {
 	r := response{}
 	r.processResp = func(res []byte, statusCode int, headers http.Header) error {
@@ -260,35 +341,33 @@ func NewJsonResponse(data any) *response {
 	return &r
 }
 
-// ClientError ---------------------------------------------
-func (e ClientError) String() string {
+// ErrorResponse --------------------------------------------------------------
+
+// Error implements the error interface
+func (e ErrorResponse) Error() string {
 	return fmt.Sprintf("status code: %v\nresponse body: %s\n", e.StatusCode, e.Response)
 }
 
-func (e ClientError) Error() string {
-	return e.String()
-}
+// Options --------------------------------------------------------------------
 
-// Options -------------------------------------------------
+// SetOptions sets options on the client
 func SetOptions(c *client, opts ...option) {
 	for _, optionf := range opts {
 		optionf(c)
 	}
 }
 
-func SetOption(c *client, o option) {
-	o(c)
-}
-
+// SetOptionsStruct sets options by the given Options struct
 func SetOptionsStruct(o Options) option {
 	return func(c *client) {
 		c.baseUrl = o.BaseUrl
 		c.timeout = o.Timeout
-		c.logf = o.Logf
 
-		if c.logf == nil {
-			c.logf = log.Printf
+		f := o.Logf
+		if f == nil {
+			f = log.Printf
 		}
+		c.logf = f
 
 		c.debug = o.Debug
 		c.client = o.Client
@@ -297,49 +376,97 @@ func SetOptionsStruct(o Options) option {
 	}
 }
 
+// BaseUrl sets the base URL to the given url
 func BaseUrl(url string) option {
 	return func(c *client) {
 		c.baseUrl = url
 	}
 }
 
+// Timeout sets the timeout to the given duration
 func Timeout(d time.Duration) option {
 	return func(c *client) {
 		c.timeout = d
 	}
 }
 
+// Logf sets the logging function to the given function
 func Logf(f func(string, ...any)) option {
 	return func(c *client) {
+
+		// Ensure the function is set
+		if f == nil {
+			f = log.Printf
+		}
 		c.logf = f
 	}
 }
 
-func Debug(d bool) option {
+// Debug sets the debug mode
+func Debug(on bool) option {
 	return func(c *client) {
-		c.debug = d
+		c.debug = on
 	}
 }
 
-func Client(cl http.Client) option {
+// Client sets the client
+func Client(cl *http.Client) option {
 	return func(c *client) {
 		c.client = cl
 	}
 }
 
+// Header sets the headers
 func Header(headers http.Header) option {
 	return func(c *client) {
 		c.headers = headers
 	}
 }
 
-func SetQueryParams(queryParams map[string]any) option {
+// SetQueryParams sets the query parameters
+func SetQueryParams(queryParams url.Values) option {
 	return func(c *client) {
 		c.queryParams = queryParams
 	}
 }
 
-// Helpers -------------------------------------------------
+// Request Options ------------------------------------------------------------
+
+// initRequestOptions initializes the request options
+func initRequestOptions(opts ...requestOption) *requestOptions {
+	r := requestOptions{}
+	for _, optionf := range opts {
+		optionf(&r)
+	}
+
+	return &r
+}
+
+// Gzip turns on the gzip processing for the request
+func Gzip() requestOption {
+	return func(r *requestOptions) {
+		r.gzip = true
+	}
+}
+
+// OverWriteHeaders will use http.Header.Set overwriting all existing values
+func OverWriteHeaders() requestOption {
+	return func(r *requestOptions) {
+		r.overwriteHeaders = true
+	}
+}
+
+// OverWriteQueryParams will use url.Values.Set overwriting all existing values
+func OverWriteQueryParams() requestOption {
+	return func(r *requestOptions) {
+		r.overwriteQueryParams = true
+	}
+}
+
+// Helpers --------------------------------------------------------------------
+
+// createUrlValues will create url.Values from any map or struct.
+// If any other type is given, then an error is returned.
 func createUrlValues(data any) (url.Values, error) {
 	t := reflect.ValueOf(data).Type().Kind()
 	values := url.Values{}
@@ -362,6 +489,8 @@ func createUrlValues(data any) (url.Values, error) {
 	}
 }
 
+// structFieldsToMap creates a map from any given struct.
+// The struct fields must be exported and tagged with a `form:"fieldName"` tag.
 func structFieldsToMap(s any) map[string]any {
 	m := make(map[string]any)
 

@@ -197,7 +197,12 @@ func (c *client) Request(req *request, res *response, opts ...requestOption) err
 	}
 
 	// Set headers
-	request.Header = c.headers
+	for k, v := range c.headers {
+		for _, v2 := range v {
+			request.Header.Set(k, v2)
+		}
+	}
+
 	for k, v := range req.Headers {
 		for _, v2 := range v {
 			if options.overwriteHeaders {
@@ -216,14 +221,12 @@ func (c *client) Request(req *request, res *response, opts ...requestOption) err
 		}
 	}
 
-	if req.QueryParams != nil {
-		for k, v := range req.QueryParams {
-			for _, v2 := range v {
-				if options.overwriteQueryParams {
-					query.Set(k, v2)
-				} else {
-					query.Add(k, v2)
-				}
+	for k, v := range req.QueryParams {
+		for _, v2 := range v {
+			if options.overwriteQueryParams {
+				query.Set(k, v2)
+			} else {
+				query.Add(k, v2)
 			}
 		}
 	}
@@ -288,8 +291,8 @@ func NewEmptyRequest() *request {
 	return &request{}
 }
 
-// NewRawRequest creates a new raw request
-func NewRawRequest(data []byte) *request {
+// NewRequest creates a new raw request
+func NewRequest(data []byte) *request {
 	return &request{
 		data: data,
 	}
@@ -344,8 +347,8 @@ func (r *response) StatusCode() int {
 	return r.statusCode
 }
 
-// NewRawResponse creates a new raw response
-func NewRawResponse() *response {
+// NewResponse creates a new raw response
+func NewResponse() *response {
 	r := response{}
 	r.data = make([]byte, 0)
 	r.processResp = func(res []byte, statusCode int, headers http.Header) error {

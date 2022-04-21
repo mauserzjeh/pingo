@@ -23,7 +23,10 @@
 package pingo
 
 import (
+	"bytes"
+	"compress/gzip"
 	"encoding/json"
+	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -148,7 +151,8 @@ func TestSetOptions(t *testing.T) {
 	assertEqual(t, len(c.QueryParams()), 0)
 }
 
-func TestGetRequest(t *testing.T) {
+func TestEmptyRequest(t *testing.T) {
+	// initial test setup
 	mux, server, shutdown := testServer()
 	defer shutdown()
 
@@ -162,8 +166,8 @@ func TestGetRequest(t *testing.T) {
 		Bar: FOO,
 	}
 
-	path1 := "/get-test-json"
-	mux.HandleFunc(path1, func(w http.ResponseWriter, r *http.Request) {
+	path := "/test-empty-request"
+	mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("content-type", "application/json")
 		w.Header().Set(FOO, BAR)
 		w.WriteHeader(http.StatusOK)
@@ -178,7 +182,7 @@ func TestGetRequest(t *testing.T) {
 	// create request
 	req := NewEmptyRequest()
 	req.Method = GET
-	req.Path = path1
+	req.Path = path
 
 	// json response
 	res := NewJsonResponse(&data{})
@@ -192,7 +196,273 @@ func TestGetRequest(t *testing.T) {
 	assertEqual(t, res.Headers().Get(FOO), BAR)
 
 	// raw response
-	resRaw := NewRawResponse()
+	resRaw := NewResponse()
 	err = c.Request(req, resRaw)
 	assertEqual(t, string(resRaw.Data().([]byte)) == `{"foo":"bar","bar":"foo"}`, true)
+}
+
+func TestRequest(t *testing.T) {
+	// initial test setup
+	mux, server, shutdown := testServer()
+	defer shutdown()
+
+	path := "/test-raw-request"
+	mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
+		body, _ := ioutil.ReadAll(r.Body)
+		w.WriteHeader(http.StatusOK)
+		w.Write(body)
+	})
+
+	// create client
+	c := NewClient(
+		BaseUrl(server.URL),
+	)
+
+	data := []byte{1}
+
+	// create request
+	req := NewRequest(data)
+	req.Method = POST
+	req.Path = path
+
+	// response
+	res := NewResponse()
+
+	err := c.Request(req, res)
+	assertEqual(t, err == nil, true)
+	assertEqual(t, len(res.Data().([]byte)) == len(data), true)
+	assertEqual(t, res.Data().([]byte)[0] == data[0], true)
+}
+
+func TestJsonRequest(t *testing.T) {
+	// initial test setup
+	mux, server, shutdown := testServer()
+	defer shutdown()
+
+	type data struct {
+		Foo string `json:"foo"`
+		Bar string `json:"bar"`
+	}
+
+	path := "/test-json-request"
+	mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
+		var rd data
+		err := json.NewDecoder(r.Body).Decode(&rd)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		rd.Foo = FOO
+		rd.Bar = BAR
+
+		w.Header().Set("content-type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write(jsonData(rd))
+	})
+
+	// create client
+	c := NewClient(
+		BaseUrl(server.URL),
+	)
+
+	// create request
+	req, err := NewJsonRequest(data{
+		Foo: BAR,
+		Bar: FOO,
+	})
+	assertEqual(t, err == nil, true)
+	assertEqual(t, req.Headers.Get("content-type"), "application/json")
+
+	req.Method = POST
+	req.Path = path
+
+	// response
+	res := NewJsonResponse(&data{})
+
+	err = c.Request(req, res)
+	assertEqual(t, err == nil, true)
+
+	resData := res.Data().(*data)
+	assertEqual(t, resData.Foo, FOO)
+	assertEqual(t, resData.Bar, BAR)
+}
+
+func TestFormRequest(t *testing.T) {
+	// initial test setup
+	mux, server, shutdown := testServer()
+	defer shutdown()
+
+	type data struct {
+		Foo string `json:"foo" form:"foo"`
+		Bar string `json:"bar" form:"bar"`
+	}
+
+	path := "/test-form-request"
+	mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
+		foo := r.FormValue("foo")
+		bar := r.FormValue("bar")
+
+		w.Header().Set("content-type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write(jsonData(data{
+			Foo: bar,
+			Bar: foo,
+		}))
+	})
+
+	// create client
+	c := NewClient(
+		BaseUrl(server.URL),
+		Debug(true),
+		Logf(func(s string, a ...any) {
+		}),
+	)
+
+	t.Run("FormRequestStruct", func(t *testing.T) {
+		// create request
+		req, err := NewFormRequest(data{
+			Foo: BAR,
+			Bar: FOO,
+		})
+
+		assertEqual(t, err == nil, true)
+		assertEqual(t, req.Headers.Get("content-type"), "application/x-www-form-urlencoded")
+
+		req.Method = POST
+		req.Path = path
+
+		// response
+		res := NewJsonResponse(&data{})
+
+		err = c.Request(req, res)
+		assertEqual(t, err == nil, true)
+
+		resData := res.Data().(*data)
+		assertEqual(t, resData.Foo, FOO)
+		assertEqual(t, resData.Bar, BAR)
+	})
+
+	t.Run("FormRequestMap", func(t *testing.T) {
+		// create request
+		req, err := NewFormRequest(map[string]any{
+			"foo": BAR,
+			"bar": FOO,
+		})
+
+		assertEqual(t, err == nil, true)
+		assertEqual(t, req.Headers.Get("content-type"), "application/x-www-form-urlencoded")
+
+		req.Method = POST
+		req.Path = path
+
+		// response
+		res := NewJsonResponse(&data{})
+
+		err = c.Request(req, res)
+		assertEqual(t, err == nil, true)
+
+		resData := res.Data().(*data)
+		assertEqual(t, resData.Foo, FOO)
+		assertEqual(t, resData.Bar, BAR)
+	})
+
+	t.Run("FormRequestError", func(t *testing.T) {
+		// create request
+		req, err := NewFormRequest(1)
+		assertEqual(t, req, nil)
+		assertEqual(t, err != nil, true)
+	})
+
+}
+
+func TestErrorResponse(t *testing.T) {
+	// initial test setup
+	mux, server, shutdown := testServer()
+	defer shutdown()
+
+	// error string
+	es := `oops an error happened!`
+
+	path := "/test-error-response"
+	mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("error", "error")
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(es))
+	})
+
+	// create client
+	c := NewClient(
+		BaseUrl(server.URL),
+	)
+
+	// create request
+	req := NewEmptyRequest()
+	req.Method = GET
+	req.Path = path
+
+	res := NewResponse()
+	err := c.Request(req, res)
+	assertEqual(t, err != nil, true)
+
+	ce := err.(ErrorResponse)
+	assertEqual(t, ce.Error(), "status code: 400, response body: oops an error happened!")
+	assertEqual(t, ce.Headers.Get("error"), "error")
+	assertEqual(t, ce.StatusCode, http.StatusBadRequest)
+	assertEqual(t, string(ce.Response), es)
+}
+
+func TestRequestOptions(t *testing.T) {
+	// initial test setup
+	mux, server, shutdown := testServer()
+	defer shutdown()
+
+	gs := "this is a gzipped content"
+
+	path := "/test-request-options"
+	mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
+		assertEqual(t, r.Header.Get(FOO), FOO)
+		assertEqual(t, r.FormValue(BAR), BAR)
+
+		var b bytes.Buffer
+		gw := gzip.NewWriter(&b)
+		gw.Write([]byte(gs))
+		gw.Close()
+
+		w.WriteHeader(http.StatusOK)
+		w.Write(b.Bytes())
+	})
+
+	c := NewClient(
+		BaseUrl(server.URL),
+		Header(http.Header{
+			FOO: {"this value will get overwritten by request options"},
+		}),
+		SetQueryParams(url.Values{
+			BAR: {"this value will get overwritten by request options"},
+		}),
+	)
+
+	// request
+	req := NewEmptyRequest()
+	req.Method = GET
+	req.Path = path
+	req.Headers.Set(FOO, FOO)
+	req.QueryParams.Set(BAR, BAR)
+
+	// response
+	res := NewResponse()
+
+	err := c.Request(req, res,
+		Gzip(),
+		OverWriteHeaders(),
+		OverWriteQueryParams(),
+	)
+	assertEqual(t, err == nil, true)
+	assertEqual(t, res.StatusCode(), http.StatusOK)
+	assertEqual(t, string(res.Data().([]byte)), gs)
+}
+
+func TestComplex(t *testing.T) {
+
 }

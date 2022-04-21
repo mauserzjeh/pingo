@@ -34,7 +34,6 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
-	"path"
 	"reflect"
 	"strings"
 	"time"
@@ -103,7 +102,6 @@ type (
 	client struct {
 		client      *http.Client         // http.Client
 		baseUrl     string               // Base URL
-		timeout     time.Duration        // Timeout
 		logf        func(string, ...any) // Logger function
 		debug       bool                 // Debug mode
 		headers     http.Header          // Headers
@@ -135,6 +133,36 @@ func (c *client) defaults() {
 	c.logf = log.Printf
 }
 
+// BaseUrl returns the base URL set in the client
+func (c *client) BaseUrl() string {
+	return c.baseUrl
+}
+
+// Timeout returns the timeout set in the client
+func (c *client) Timeout() time.Duration {
+	return c.client.Timeout
+}
+
+// Debug returns if the client is in debug mode
+func (c *client) Debug() bool {
+	return c.debug
+}
+
+// Headers returns the headers set in the client
+func (c *client) Headers() http.Header {
+	return c.headers
+}
+
+// QueryParams returns the query parameters set in the client
+func (c *client) QueryParams() url.Values {
+	return c.queryParams
+}
+
+// Client returns the http.Client used by the client
+func (c *client) Client() *http.Client {
+	return c.client
+}
+
 // Request performs a request with the given request and options and sets the response with the result. Upon an error a non nil error is returned.
 // A response with a status code that is not between 200 and 299 (inclusive) also considered as an error.
 func (c *client) Request(req *request, res *response, opts ...requestOption) error {
@@ -144,7 +172,7 @@ func (c *client) Request(req *request, res *response, opts ...requestOption) err
 	options := initRequestOptions(opts...)
 
 	// Create request URL
-	requestUrl := path.Join(c.baseUrl, req.Path)
+	requestUrl := fmt.Sprintf("%s/%s", strings.TrimRight(c.baseUrl, "/"), strings.TrimLeft(req.Path, "/"))
 	if c.debug {
 		c.logf("[REQUEST] %s: %s\n", req.Method, requestUrl)
 	}
@@ -255,6 +283,11 @@ func (c *client) Request(req *request, res *response, opts ...requestOption) err
 
 // Request --------------------------------------------------------------------
 
+// NewEmptyRequest creates a new empty request.
+func NewEmptyRequest() *request {
+	return &request{}
+}
+
 // NewRawRequest creates a new raw request
 func NewRawRequest(data []byte) *request {
 	return &request{
@@ -314,6 +347,7 @@ func (r *response) StatusCode() int {
 // NewRawResponse creates a new raw response
 func NewRawResponse() *response {
 	r := response{}
+	r.data = make([]byte, 0)
 	r.processResp = func(res []byte, statusCode int, headers http.Header) error {
 		r.data = res
 		r.statusCode = statusCode
@@ -327,6 +361,7 @@ func NewRawResponse() *response {
 // NewJsonResponse creates a new json response
 func NewJsonResponse(data any) *response {
 	r := response{}
+	r.data = data
 	r.processResp = func(res []byte, statusCode int, headers http.Header) error {
 		err := json.Unmarshal(res, r.data)
 		if err != nil {
@@ -360,17 +395,24 @@ func SetOptions(c *client, opts ...option) {
 // SetOptionsStruct sets options by the given Options struct
 func SetOptionsStruct(o Options) option {
 	return func(c *client) {
-		c.baseUrl = o.BaseUrl
-		c.timeout = o.Timeout
-
 		f := o.Logf
 		if f == nil {
 			f = log.Printf
 		}
 		c.logf = f
 
+		cl := o.Client
+		if cl == nil {
+			cl = &http.Client{}
+		}
+		c.client = cl
+
+		if o.Timeout > 0 {
+			c.client.Timeout = o.Timeout
+		}
+
 		c.debug = o.Debug
-		c.client = o.Client
+		c.baseUrl = o.BaseUrl
 		c.headers = o.Headers
 		c.queryParams = o.QueryParams
 	}
@@ -386,7 +428,7 @@ func BaseUrl(url string) option {
 // Timeout sets the timeout to the given duration
 func Timeout(d time.Duration) option {
 	return func(c *client) {
-		c.timeout = d
+		c.client.Timeout = d
 	}
 }
 

@@ -526,7 +526,7 @@ func createUrlValues(data any) (url.Values, error) {
 	case reflect.Map:
 		iter := reflect.ValueOf(data).MapRange()
 		for iter.Next() {
-			values.Add(iter.Key().String(), iter.Value().String())
+			values.Add(fmt.Sprint(iter.Key()), fmt.Sprint(iter.Value()))
 		}
 		return values, nil
 	default:

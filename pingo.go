@@ -288,13 +288,19 @@ func (c *client) Request(req *request, res *response, opts ...requestOption) err
 
 // NewEmptyRequest creates a new empty request.
 func NewEmptyRequest() *request {
-	return &request{}
+	return &request{
+		Headers:     http.Header{},
+		QueryParams: url.Values{},
+		data:        nil,
+	}
 }
 
 // NewRequest creates a new raw request
 func NewRequest(data []byte) *request {
 	return &request{
-		data: data,
+		Headers:     http.Header{},
+		QueryParams: url.Values{},
+		data:        data,
 	}
 }
 
@@ -309,8 +315,9 @@ func NewJsonRequest(data any) (*request, error) {
 	h.Add("Content-Type", "application/json")
 
 	return &request{
-		data:    jsonData,
-		Headers: h,
+		Headers:     h,
+		QueryParams: url.Values{},
+		data:        jsonData,
 	}, nil
 }
 
@@ -325,8 +332,9 @@ func NewFormRequest(data any) (*request, error) {
 	h.Add("Content-Type", "application/x-www-form-urlencoded")
 
 	return &request{
-		Headers: h,
-		data:    []byte(values.Encode()),
+		Headers:     h,
+		QueryParams: url.Values{},
+		data:        []byte(values.Encode()),
 	}, nil
 }
 
@@ -383,7 +391,7 @@ func NewJsonResponse(data any) *response {
 
 // Error implements the error interface
 func (e ErrorResponse) Error() string {
-	return fmt.Sprintf("status code: %v\nresponse body: %s\n", e.StatusCode, e.Response)
+	return fmt.Sprintf("status code: %v, response body: %s", e.StatusCode, e.Response)
 }
 
 // Options --------------------------------------------------------------------

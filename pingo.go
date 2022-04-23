@@ -76,9 +76,10 @@ type (
 
 	// Request options
 	requestOptions struct {
-		gzip                 bool // Whether the response is gzipped or not
-		overwriteHeaders     bool // Whether to overwrite existing headers
-		overwriteQueryParams bool // Whether to overwrite existing query parameters
+		gzip                 bool             // Whether the response is gzipped or not
+		overwriteHeaders     bool             // Whether to overwrite existing headers
+		overwriteQueryParams bool             // Whether to overwrite existing query parameters
+		customError          func([]byte) any // Process response as a custom error object
 	}
 
 	// request struct holds necessary data for a request
@@ -111,9 +112,9 @@ type (
 	// ResponseError struct holds the necessary data when an error response is received.
 	// A response is considered to be an error when the status code is not between 200 and 299 (inclusive).
 	ResponseError struct {
-		Response   []byte      // Response content
-		StatusCode int         // Status code
-		Headers    http.Header // Response headers
+		data       any         // Response data
+		statusCode int         // Status code
+		headers    http.Header // Response headers
 	}
 )
 
@@ -273,11 +274,17 @@ func (c *client) Request(req *request, res *response, opts ...requestOption) err
 
 	// Return error if a bad status code is returned
 	if response.StatusCode < 200 || response.StatusCode > 299 {
-		return ResponseError{
-			Response:   resBody,
-			StatusCode: response.StatusCode,
-			Headers:    response.Header,
+		resErr := ResponseError{
+			data:       resBody,
+			statusCode: response.StatusCode,
+			headers:    response.Header,
 		}
+
+		if options.customError != nil {
+			resErr.data = options.customError(resBody)
+		}
+
+		return resErr
 	}
 
 	// Process and set response
@@ -395,7 +402,26 @@ func NewJsonResponse(data any) *response {
 
 // Error implements the error interface
 func (e ResponseError) Error() string {
-	return fmt.Sprintf("status code: %v, response body: %s", e.StatusCode, e.Response)
+	if _, ok := e.data.([]byte); ok {
+		return fmt.Sprintf("status code: %v, response: %s", e.statusCode, e.data)
+	}
+
+	return fmt.Sprintf("status code: %v, response: %+v", e.statusCode, e.data)
+}
+
+// Data returns the data of the response error
+func (e ResponseError) Data() any {
+	return e.data
+}
+
+// Headers returns the headers of the response error
+func (e ResponseError) Headers() http.Header {
+	return e.headers
+}
+
+// StatusCode returns the status code of the response error
+func (e ResponseError) StatusCode() int {
+	return e.statusCode
 }
 
 // Options --------------------------------------------------------------------
@@ -517,6 +543,27 @@ func OverWriteHeaders() requestOption {
 func OverWriteQueryParams() requestOption {
 	return func(r *requestOptions) {
 		r.overwriteQueryParams = true
+	}
+}
+
+// CustomError will try to unmarshal response body into an object
+func CustomError(data any) requestOption {
+	return func(r *requestOptions) {
+		if data == nil {
+			r.customError = func(b []byte) any {
+				return b
+			}
+			return
+		}
+
+		r.customError = func(b []byte) any {
+			err := json.Unmarshal(b, data)
+			if err != nil {
+				return b
+			}
+
+			return data
+		}
 	}
 }
 

@@ -26,6 +26,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/json"
+	"fmt"
 	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
@@ -245,8 +246,8 @@ func TestJsonRequest(t *testing.T) {
 		Bar string `json:"bar"`
 	}
 
-	path := "/test-json-request"
-	mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
+	path1 := "/test-json-request"
+	mux.HandleFunc(path1, func(w http.ResponseWriter, r *http.Request) {
 		var rd data
 		err := json.NewDecoder(r.Body).Decode(&rd)
 		if err != nil {
@@ -262,31 +263,53 @@ func TestJsonRequest(t *testing.T) {
 		w.Write(jsonData(rd))
 	})
 
+	path2 := "/test-json-request-wrong"
+	mux.HandleFunc(path2, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`this is clearly not json`))
+	})
+
 	// create client
 	c := NewClient(
 		BaseUrl(server.URL),
 	)
 
-	// create request
-	req, err := NewJsonRequest(data{
-		Foo: BAR,
-		Bar: FOO,
+	t.Run("JsonRequestOkJsonResponse", func(t *testing.T) {
+		// create request
+		req, err := NewJsonRequest(data{
+			Foo: BAR,
+			Bar: FOO,
+		})
+		assertEqual(t, err == nil, true)
+		assertEqual(t, req.Headers.Get("content-type"), "application/json")
+
+		req.Method = POST
+		req.Path = path1
+
+		// response
+		res := NewJsonResponse(&data{})
+
+		err = c.Request(req, res)
+		assertEqual(t, err == nil, true)
+
+		resData := res.Data().(*data)
+		assertEqual(t, resData.Foo, FOO)
+		assertEqual(t, resData.Bar, BAR)
 	})
-	assertEqual(t, err == nil, true)
-	assertEqual(t, req.Headers.Get("content-type"), "application/json")
 
-	req.Method = POST
-	req.Path = path
+	t.Run("JsonRequestWrongJsonResponse", func(t *testing.T) {
+		// create request
+		req := NewEmptyRequest()
+		req.Path = path2
 
-	// response
-	res := NewJsonResponse(&data{})
+		// response
+		res := NewJsonResponse(&data{})
 
-	err = c.Request(req, res)
-	assertEqual(t, err == nil, true)
+		err := c.Request(req, res)
+		assertEqual(t, err != nil, true)
+	})
 
-	resData := res.Data().(*data)
-	assertEqual(t, resData.Foo, FOO)
-	assertEqual(t, resData.Bar, BAR)
 }
 
 func TestFormRequest(t *testing.T) {
@@ -383,13 +406,35 @@ func TestErrorResponse(t *testing.T) {
 	defer shutdown()
 
 	// error string
-	es := `oops an error happened!`
+	e1 := `oops an error happened!`
 
-	path := "/test-error-response"
-	mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
+	path1 := "/test-error-response"
+	mux.HandleFunc(path1, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("error", "error")
 		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte(es))
+		w.Write([]byte(e1))
+	})
+
+	type errResp struct {
+		This  string `json:"this"`
+		Is    string `json:"is"`
+		Error string `json:"error"`
+		Num   int    `json:"num"`
+	}
+
+	// error object
+	e2 := errResp{
+		This:  "this",
+		Is:    "is",
+		Error: "error",
+		Num:   12345,
+	}
+
+	path2 := "/test-error-response-custom-error-ok"
+	mux.HandleFunc(path2, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("error", "error")
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write(jsonData(e2))
 	})
 
 	// create client
@@ -397,20 +442,85 @@ func TestErrorResponse(t *testing.T) {
 		BaseUrl(server.URL),
 	)
 
-	// create request
-	req := NewEmptyRequest()
-	req.Method = GET
-	req.Path = path
+	t.Run("ErrorResponseRaw", func(t *testing.T) {
+		// create request
+		req := NewEmptyRequest()
+		req.Path = path1
 
-	res := NewResponse()
-	err := c.Request(req, res)
-	assertEqual(t, err != nil, true)
+		res := NewResponse()
+		err := c.Request(req, res)
+		assertEqual(t, err != nil, true)
 
-	ce := err.(ResponseError)
-	assertEqual(t, ce.Error(), "status code: 400, response body: oops an error happened!")
-	assertEqual(t, ce.Headers.Get("error"), "error")
-	assertEqual(t, ce.StatusCode, http.StatusBadRequest)
-	assertEqual(t, string(ce.Response), es)
+		re := err.(ResponseError)
+		assertEqual(t, re.Error(), fmt.Sprintf("status code: 400, response: %s", e1))
+		assertEqual(t, re.Headers().Get("error"), "error")
+		assertEqual(t, re.StatusCode(), http.StatusBadRequest)
+		assertEqual(t, string(re.Data().([]byte)), e1)
+	})
+
+	t.Run("ErrorResponseCustomErrorOk", func(t *testing.T) {
+		// create request
+		req := NewEmptyRequest()
+		req.Path = path2
+
+		res := NewResponse()
+		err := c.Request(req, res, CustomError(&errResp{}))
+		assertEqual(t, err != nil, true)
+
+		re := err.(ResponseError)
+		assertEqual(t, re.Error(), fmt.Sprintf(`status code: 400, response: %+v`, &e2))
+		assertEqual(t, re.Headers().Get("error"), "error")
+		assertEqual(t, re.StatusCode(), http.StatusBadRequest)
+
+		d, ok := re.Data().(*errResp)
+		assertEqual(t, ok, true)
+		assertEqual(t, d.This, "this")
+		assertEqual(t, d.Is, "is")
+		assertEqual(t, d.Error, "error")
+		assertEqual(t, d.Num, 12345)
+	})
+
+	t.Run("ErrorResponseCustomErrorWrong", func(t *testing.T) {
+		// create request
+		req := NewEmptyRequest()
+		req.Path = path1
+
+		res := NewResponse()
+		err := c.Request(req, res, CustomError(&errResp{}))
+		assertEqual(t, err != nil, true)
+
+		re := err.(ResponseError)
+		assertEqual(t, re.Error(), fmt.Sprintf(`status code: 400, response: %s`, e1))
+		assertEqual(t, re.Headers().Get("error"), "error")
+		assertEqual(t, re.StatusCode(), http.StatusBadRequest)
+
+		_, ok := re.Data().(*errResp)
+		assertEqual(t, ok, false)
+
+		_, ok2 := re.Data().([]byte)
+		assertEqual(t, ok2, true)
+	})
+
+	t.Run("ErrorResponseCustomErrorNil", func(t *testing.T) {
+		// create request
+		req := NewEmptyRequest()
+		req.Path = path1
+
+		res := NewResponse()
+		err := c.Request(req, res, CustomError(nil))
+		assertEqual(t, err != nil, true)
+
+		re := err.(ResponseError)
+		assertEqual(t, re.Error(), fmt.Sprintf(`status code: 400, response: %s`, e1))
+		assertEqual(t, re.Headers().Get("error"), "error")
+		assertEqual(t, re.StatusCode(), http.StatusBadRequest)
+
+		_, ok := re.Data().(*errResp)
+		assertEqual(t, ok, false)
+
+		_, ok2 := re.Data().([]byte)
+		assertEqual(t, ok2, true)
+	})
 }
 
 func TestRequestOptions(t *testing.T) {

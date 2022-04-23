@@ -84,11 +84,10 @@ func main() {
 }
 ```
 
-<hr>
-
 ## Client options
 ```go
-// Client options can be set by initializing a `Option` struct or by using option functions exposed by the package.
+// Client options can be set by initializing a `Option` struct or 
+// by using option functions exposed by the package.
 Options struct {
     BaseUrl     string               // Base URL for the client
     Timeout     time.Duration        // Client timeout
@@ -120,7 +119,6 @@ pingo.SetOptions(client,
 | Headers          | Set headers that will be included in every request          |
 | QueryParams      | Set query parameters that will be included in every request |
 
-<hr>
 
 ## Request object
 ```go
@@ -158,8 +156,6 @@ req.QueryParams.Set("Foo", "Bar") // If necessary addtional query parameters can
 
 ```
 
-<hr>
-
 ## Response object
 ```go
 // Create a response object
@@ -188,7 +184,8 @@ statusCode := res.StatusCode()
 // Access response data
 data := res.Data()
 
-// If the response was created with NewResponse the returned data will be a byte slice. If the response was created with NewJsonResponse the resuturned data will be the same type as the parameter that was given to NewJsonResponse
+// If the response was created with NewResponse the returned data will be a byte slice. 
+// If the response was created with NewJsonResponse the resuturned data will be the same type as the parameter that was given to NewJsonResponse
 byteData := data.([]byte) // NewResponse
 myData := data.(*MyData) // NewJsonResponse
 ```
@@ -216,6 +213,7 @@ data := res.Data()
 | Gzip                 | Turns on the gzip processing of the response                                        |
 | OverWriteHeaders     | Headers set in the request will overwrite existing client headers                   |
 | OverWriteQueryParams | Query parameters set in the request will overwrite existing client query parameters |
+| CustomError          | Tries to unmarshal error response into a custom object
 
 ## Error handling
 ```go
@@ -223,13 +221,46 @@ data := res.Data()
 err := client.Request(req, res)
 
 // If the request was not successful then a non nil error is returned.
-// Errors can have multiple causes e.g.: invalid or missing options, but also a response with
+// Errors can have multiple causes e.g.: invalid or missing options, but a response with
 // the status code that is not between 200 and 299 (inclusive) is also considered as an error.
 // In this case the package exposes a `ResponseError` struct.
-if resErr, ok := err.(ResponseError); ok {
-    headers := resErr.Headers // Access response headers
-    statusCode := resErr.StatusCode // Access response status code
-    body := resErr.Response // Access response body
+if err != nil {
+    if resErr, ok := err.(ResponseError); ok {
+        headers := resErr.Headers() // Access response headers
+        statusCode := resErr.StatusCode() // Access response status code
+        data := resErr.Data().([]byte) // Access response body
+    }
 }
 ```
+If a specific error response is expected, then a custom error object can be given to the request.
+```go
+type MyError struct {
+    Field1 string `json:"field1"`
+    Field2 string `json:"field2"`
+}
+
+// Make request
+err := client.Request(req, res,
+    pingo.CustomError(&MyError{}),
+)
+
+if err != nil {
+    if resErr, ok := err.(ResponseError); ok {
+        // Try to type assert the response data to the custom error object
+        if data, ok2 := resErr.Data().(*MyError); ok2 {
+            log.Printf("field1: %v, field2: %v\n", data.Field1, data.Field2)
+
+        // If some error happens during the unmarshaling of the error response,
+        // then the data will hold the raw body, the same way as when not using
+        // the `CustomError` request option.
+        
+        // The only difference is that 
+        // the result of the type assertion should be checked.
+        } else if data, ok3 := resErr.Data().([]byte); ok3 {
+            log.Printf("%s\n", data)
+        }
+    }
+}
+
+
 

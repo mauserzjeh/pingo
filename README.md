@@ -13,7 +13,7 @@ Pingo is a general purpose, high level API client library implemented in Go. It 
 
 # Installation
 ```
-go get -u github.com/mauserzjeh/controller
+go get -u github.com/mauserzjeh/pingo
 ```
 
 # Tests

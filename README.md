@@ -173,7 +173,7 @@ type MyData struct {
 // will try to unmarshal the response into the given data type.
 res := NewJsonResponse(&MyData{})
 ```
-After a request mas made then response data can be accessed by the following methods.
+After a request was made then response data can be accessed by the following methods.
 ```go
 // Access response headers
 headers := res.Headers()

@@ -119,8 +119,8 @@ func TestNewClientWithOptions(t *testing.T) {
 		Client(&http.Client{
 			Timeout: 5 * time.Second,
 		}),
-		Header(h),
-		SetQueryParams(q),
+		Headers(h),
+		QueryParams(q),
 	)
 
 	assertEqual(t, c2.Client() != nil, true)
@@ -406,7 +406,7 @@ func TestErrorResponse(t *testing.T) {
 	err := c.Request(req, res)
 	assertEqual(t, err != nil, true)
 
-	ce := err.(ErrorResponse)
+	ce := err.(ResponseError)
 	assertEqual(t, ce.Error(), "status code: 400, response body: oops an error happened!")
 	assertEqual(t, ce.Headers.Get("error"), "error")
 	assertEqual(t, ce.StatusCode, http.StatusBadRequest)
@@ -436,10 +436,10 @@ func TestRequestOptions(t *testing.T) {
 
 	c := NewClient(
 		BaseUrl(server.URL),
-		Header(http.Header{
+		Headers(http.Header{
 			FOO: {"this value will get overwritten by request options"},
 		}),
-		SetQueryParams(url.Values{
+		QueryParams(url.Values{
 			BAR: {"this value will get overwritten by request options"},
 		}),
 	)
@@ -531,7 +531,7 @@ func TestComplex(t *testing.T) {
 	// client
 	c := NewClient(
 		BaseUrl(server.URL),
-		Header(http.Header{
+		Headers(http.Header{
 			"X-API-KEY": {API_KEY},
 		}),
 	)

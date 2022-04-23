@@ -108,9 +108,9 @@ type (
 		queryParams url.Values           // Query parameters
 	}
 
-	// ErrorResponse struct holds the necessary data when an error response is received.
+	// ResponseError struct holds the necessary data when an error response is received.
 	// A response is considered to be an error when the status code is not between 200 and 299 (inclusive).
-	ErrorResponse struct {
+	ResponseError struct {
 		Response   []byte      // Response content
 		StatusCode int         // Status code
 		Headers    http.Header // Response headers
@@ -273,7 +273,7 @@ func (c *client) Request(req *request, res *response, opts ...requestOption) err
 
 	// Return error if a bad status code is returned
 	if response.StatusCode < 200 || response.StatusCode > 299 {
-		return ErrorResponse{
+		return ResponseError{
 			Response:   resBody,
 			StatusCode: response.StatusCode,
 			Headers:    response.Header,
@@ -289,6 +289,7 @@ func (c *client) Request(req *request, res *response, opts ...requestOption) err
 // NewEmptyRequest creates a new empty request.
 func NewEmptyRequest() *request {
 	return &request{
+		Method:      GET,
 		Headers:     http.Header{},
 		QueryParams: url.Values{},
 		data:        nil,
@@ -298,6 +299,7 @@ func NewEmptyRequest() *request {
 // NewRequest creates a new raw request
 func NewRequest(data []byte) *request {
 	return &request{
+		Method:      GET,
 		Headers:     http.Header{},
 		QueryParams: url.Values{},
 		data:        data,
@@ -315,6 +317,7 @@ func NewJsonRequest(data any) (*request, error) {
 	h.Add("Content-Type", "application/json")
 
 	return &request{
+		Method:      GET,
 		Headers:     h,
 		QueryParams: url.Values{},
 		data:        jsonData,
@@ -332,6 +335,7 @@ func NewFormRequest(data any) (*request, error) {
 	h.Add("Content-Type", "application/x-www-form-urlencoded")
 
 	return &request{
+		Method:      GET,
 		Headers:     h,
 		QueryParams: url.Values{},
 		data:        []byte(values.Encode()),
@@ -387,10 +391,10 @@ func NewJsonResponse(data any) *response {
 	return &r
 }
 
-// ErrorResponse --------------------------------------------------------------
+// ResponseError --------------------------------------------------------------
 
 // Error implements the error interface
-func (e ErrorResponse) Error() string {
+func (e ResponseError) Error() string {
 	return fmt.Sprintf("status code: %v, response body: %s", e.StatusCode, e.Response)
 }
 
@@ -470,14 +474,14 @@ func Client(cl *http.Client) option {
 }
 
 // Header sets the headers
-func Header(headers http.Header) option {
+func Headers(headers http.Header) option {
 	return func(c *client) {
 		c.headers = headers
 	}
 }
 
-// SetQueryParams sets the query parameters
-func SetQueryParams(queryParams url.Values) option {
+// QueryParams sets the query parameters
+func QueryParams(queryParams url.Values) option {
 	return func(c *client) {
 		c.queryParams = queryParams
 	}

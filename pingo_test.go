@@ -40,6 +40,7 @@ const (
 	BASE_URL = "test_base_url"
 	FOO      = "foo"
 	BAR      = "bar"
+	API_KEY  = "your_api_key"
 )
 
 // assertEqual fails if the two values are not equal
@@ -464,5 +465,129 @@ func TestRequestOptions(t *testing.T) {
 }
 
 func TestComplex(t *testing.T) {
+	// initial test setup
+	mux, server, shutdown := testServer()
+	defer shutdown()
 
+	// ----------------------------------------------------------------------------
+
+	type resData struct {
+		Int int64    `json:"int"`
+		Str string   `json:"str"`
+		Slc []string `json:"slc"`
+	}
+
+	path1 := "/get-data"
+	mux.HandleFunc(path1, func(w http.ResponseWriter, r *http.Request) {
+		apiKey := r.Header.Get("X-API-KEY")
+		if apiKey != API_KEY {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+
+		assertEqual(t, apiKey, API_KEY)
+
+		var b bytes.Buffer
+		gw := gzip.NewWriter(&b)
+		gw.Write(jsonData(resData{
+			Int: 10,
+			Str: "test",
+			Slc: []string{"a", "b", "c"},
+		}))
+		gw.Close()
+
+		w.Header().Set("content-type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write(b.Bytes())
+	})
+
+	// ----------------------------------------------------------------------------
+
+	path2 := "/post-data"
+	mux.HandleFunc(path2, func(w http.ResponseWriter, r *http.Request) {
+		apiKey := r.Header.Get("X-API-KEY")
+		if apiKey != API_KEY {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+
+		assertEqual(t, apiKey, API_KEY)
+
+		a := r.FormValue("A")
+		b := r.FormValue("B")
+		c := r.FormValue("C")
+		i := r.FormValue("int")
+		s := r.FormValue("str")
+		f := r.FormValue(FOO)
+		u := r.FormValue("unexported")
+
+		w.Header().Set("content-type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(a + b + c + i + s + f + u))
+	})
+
+	// ----------------------------------------------------------------------------
+
+	// client
+	c := NewClient(
+		BaseUrl(server.URL),
+		Header(http.Header{
+			"X-API-KEY": {API_KEY},
+		}),
+	)
+
+	// first request
+	req1 := NewEmptyRequest()
+	req1.Method = GET
+	req1.Path = path1
+
+	res1 := NewJsonResponse(&resData{})
+	err := c.Request(req1, res1, Gzip())
+
+	assertEqual(t, err == nil, true)
+	assertEqual(t, res1.StatusCode(), http.StatusOK)
+
+	resd := res1.Data().(*resData)
+	assertEqual(t, resd.Int, 10)
+	assertEqual(t, resd.Str, "test")
+	assertEqual(t, len(resd.Slc), 3)
+	assertEqual(t, resd.Slc[0], "a")
+	assertEqual(t, resd.Slc[1], "b")
+	assertEqual(t, resd.Slc[2], "c")
+
+	// test setup for next request
+	type SlcData struct {
+		A string `form:"A"`
+		B string `form:"B"`
+		C string `form:"C"`
+	}
+
+	type fData struct {
+		SlcData
+		Int        int64  `form:"int"`
+		Str        string `form:"str"`
+		unexported string `form:"ue"`
+	}
+
+	// second request
+	req2, err := NewFormRequest(fData{
+		SlcData: SlcData{
+			A: resd.Slc[0],
+			B: resd.Slc[1],
+			C: resd.Slc[2],
+		},
+		Int:        resd.Int,
+		Str:        resd.Str,
+		unexported: "unexported",
+	})
+	req2.Method = POST
+	req2.Path = path2
+	req2.QueryParams.Set(FOO, BAR)
+	assertEqual(t, err == nil, true)
+
+	res2 := NewResponse()
+
+	err = c.Request(req2, res2)
+	assertEqual(t, res2.StatusCode(), http.StatusOK)
+	assertEqual(t, string(res2.Data().([]byte)), "abc10test"+BAR)
 }

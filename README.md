@@ -121,17 +121,31 @@ pingo.SetOptions(client,
 
 
 ## Request object
+
+#### Empty request
 ```go
 // Create a request object with no body
 req := NewEmptysRequest()
 ```
 
+#### Request from raw bytes
 ```go
 // Create a request with a body from a byte slice
 req := NewRequest([]byte(`this is the request body`))
 ```
 
+#### JSON request from custom struct
 ```go
+type MyData struct {
+    Field1 string `json:"field1"`
+    Field2 int64 `json:"field2"`
+}
+
+data := MyData{
+    Field1: "value",
+    Field2: 1,
+}
+
 // Create a json request with a body from any data.
 // Data can be any type of variable or a struct with proper `json:"fieldname"` tags.
 // An error is returned if the marshaling of the data resulted in an error.
@@ -139,7 +153,18 @@ req := NewRequest([]byte(`this is the request body`))
 req, err := NewJsonRequest(data)
 ```
 
+#### Form request from custom struct
 ```go
+type MyData struct {
+    Field1 string `form:"field1"`
+    Field2 int64 `form:"field2"`
+}
+
+data := MyData{
+    Field1: "value",
+    Field2: 1,
+}
+
 // Create a form request with a body from any data.
 // Data can be any type of map or a struct with proper `form:"fieldname"` tags.
 // An error is returned if the marshaling of the data resulted in an error.
@@ -147,6 +172,7 @@ req, err := NewJsonRequest(data)
 req, err := NewFormRequest(data)
 ```
 
+#### Request fields
 ```go
 // After creating the request, additional options can be set.
 req.Method = pingo.POST // GET by default
@@ -157,11 +183,14 @@ req.QueryParams.Set("Foo", "Bar") // If necessary addtional query parameters can
 ```
 
 ## Response object
+
+#### Plain response
 ```go
 // Create a response object
 res := NewResponse()
 ```
 
+#### JSON response with custom struct
 ```go
 type MyData struct {
     Field1 string `json:"field1"`
@@ -174,6 +203,7 @@ type MyData struct {
 res := NewJsonResponse(&MyData{})
 ```
 
+#### Custom response handling via handler function
 ```go
 // Response struct for good response
 type Good struct {

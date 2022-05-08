@@ -574,6 +574,87 @@ func TestRequestOptions(t *testing.T) {
 	assertEqual(t, string(res.Data().([]byte)), gs)
 }
 
+func TestCustomResponseParse(t *testing.T) {
+	// initial test setup
+	mux, server, shutdown := testServer()
+	defer shutdown()
+
+	// ----------------------------------------------------------------------------
+
+	type good struct {
+		Success bool   `json:"success"`
+		Message string `json:"message"`
+	}
+
+	pathGood := "/good"
+	mux.HandleFunc(pathGood, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write(jsonData(good{
+			Success: true,
+			Message: "ok",
+		}))
+	})
+
+	type bad struct {
+		Success bool   `json:"success"`
+		Error   string `json:"error"`
+	}
+
+	pathBad := "/bad"
+	mux.HandleFunc(pathBad, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write(jsonData(bad{
+			Success: false,
+			Error:   "not ok",
+		}))
+	})
+
+	// ----------------------------------------------------------------------------
+
+	// client
+	c := NewClient(
+		BaseUrl(server.URL),
+	)
+
+	// custom handler function
+	handler := func(res []byte, statusCode int, headers http.Header) (any, error) {
+		if statusCode == 200 {
+			g := &good{}
+			err := json.Unmarshal(res, g)
+			return g, err
+		} else {
+			b := &bad{}
+			err := json.Unmarshal(res, b)
+			return b, err
+		}
+	}
+
+	// response
+	res := NewCustomResponse(handler)
+
+	// good request
+	reqGood := NewEmptyRequest()
+	reqGood.Path = pathGood
+	err := c.Request(reqGood, res)
+	assertEqual(t, err == nil, true)
+	assertEqual(t, res.StatusCode(), http.StatusOK)
+	resGoodData, ok := res.Data().(*good)
+	assertEqual(t, ok, true)
+	assertEqual(t, resGoodData.Success, true)
+	assertEqual(t, resGoodData.Message, "ok")
+
+	// bad request
+	reqBad := NewEmptyRequest()
+	reqBad.Path = pathBad
+	err = c.Request(reqBad, res)
+	assertEqual(t, err == nil, true)
+	assertEqual(t, res.StatusCode(), http.StatusBadRequest)
+	resBadData, ok := res.Data().(*bad)
+	assertEqual(t, ok, true)
+	assertEqual(t, resBadData.Success, false)
+	assertEqual(t, resBadData.Error, "not ok")
+}
+
 func TestComplex(t *testing.T) {
 	// initial test setup
 	mux, server, shutdown := testServer()

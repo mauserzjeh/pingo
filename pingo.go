@@ -93,10 +93,11 @@ type (
 
 	// response struct holds the necessary data for a response
 	response struct {
-		processResp func([]byte, int, http.Header) error // A function that processes the request and sets the field values
-		data        any                                  // Response data
-		statusCode  int                                  // Response status code
-		headers     http.Header                          // Response headers
+		processResp     func([]byte, int, http.Header) error // A function that processes the request and sets the field values
+		data            any                                  // Response data
+		statusCode      int                                  // Response status code
+		headers         http.Header                          // Response headers
+		customRespParse bool                                 // A flag whether the processResp function is a custom one
 	}
 
 	// client struct holds the necessary data for the client
@@ -272,6 +273,11 @@ func (c *client) Request(req *request, res *response, opts ...requestOption) err
 		}
 	}
 
+	// If a custom response parsing function was given, then use that function and return the result
+	if res.customRespParse {
+		return res.processResp(resBody, response.StatusCode, response.Header)
+	}
+
 	// Return error if a bad status code is returned
 	if response.StatusCode < 200 || response.StatusCode > 299 {
 		resErr := ResponseError{
@@ -385,13 +391,32 @@ func NewJsonResponse(data any) *response {
 	r := response{}
 	r.data = data
 	r.processResp = func(res []byte, statusCode int, headers http.Header) error {
+		r.statusCode = statusCode
+		r.headers = headers
+
 		err := json.Unmarshal(res, r.data)
 		if err != nil {
 			return err
 		}
 
+		return nil
+	}
+
+	return &r
+}
+
+// NewCustomResponse creates a new response where the response is handled by the given handler
+func NewCustomResponse(handler func(res []byte, statusCode int, headers http.Header) (any, error)) *response {
+	r := response{}
+	r.customRespParse = true
+	r.processResp = func(res []byte, statusCode int, headers http.Header) error {
 		r.statusCode = statusCode
 		r.headers = headers
+		data, err := handler(res, statusCode, headers)
+		if err != nil {
+			return err
+		}
+		r.data = data
 		return nil
 	}
 

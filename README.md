@@ -173,6 +173,37 @@ type MyData struct {
 // will try to unmarshal the response into the given data type.
 res := NewJsonResponse(&MyData{})
 ```
+
+```go
+// Response struct for good response
+type Good struct {
+    Success bool `json:"success"`
+    Message string `json:"message"`
+}
+
+// Response struct for bad response
+type Bad struct {
+    Success bool `json:"success"`
+    Error string `json:"error"`
+}
+
+// Custom handler function. All possible response types should be handled for that particluar request.
+handler := func(res []byte, statusCode int, headers http.Header) (any, error) {
+    if statusCode == http.StatusOK {
+        g := &Good{}
+        err := json.Unmarshal(res, g)
+        return g, err
+    } else {
+        b := &Bad{}
+        err := json.Unmarshal(res, b)
+        return b, err
+    }
+}
+
+// Create a response object which will handle the response parsing by a custom handler function
+res := NewCustomResponse(handler)
+```
+
 After a request was made then response data can be accessed by the following methods.
 ```go
 // Access response headers
@@ -184,10 +215,24 @@ statusCode := res.StatusCode()
 // Access response data
 data := res.Data()
 
-// If the response was created with NewResponse the returned data will be a byte slice. 
-// If the response was created with NewJsonResponse the resuturned data will be the same type as the parameter that was given to NewJsonResponse
-byteData := data.([]byte) // NewResponse
-myData := data.(*MyData) // NewJsonResponse
+// ----------------------------------------------------------------------------
+
+// If the response was created with NewResponse, 
+// then the returned data will be a byte slice. 
+byteData := data.([]byte) 
+
+// If the response was created with NewJsonResponse, 
+// then the returned data will be the same type as the parameter 
+// that was given to NewJsonResponse
+myData := data.(*MyData)
+
+// If the response was created with NewCustomResponse, 
+// then the returned data will be the type according to how the handler function handled the response.
+if res.StatusCode() == http.StatusOK {
+    goodData, ok := data.(*Good)
+} else {
+    badData, ok := data.(*Bad)
+}
 ```
 
 ## Make requests
@@ -213,9 +258,12 @@ data := res.Data()
 | Gzip                 | Turns on the gzip processing of the response                                        |
 | OverWriteHeaders     | Headers set in the request will overwrite existing client headers                   |
 | OverWriteQueryParams | Query parameters set in the request will overwrite existing client query parameters |
-| CustomError          | Tries to unmarshal error response into a custom object
+| CustomError          | Tries to unmarshal error response into a custom object. Unless the response object was created with a custom handler function, because then it is the developer's responsibility to handle all possible responses for that particular request
 
 ## Error handling
+
+The following examples are only true if the response object was NOT created with a custom handler function. Otherwise it is the developer's responsibility to handle all possible responses for that particular request. Other errors are still returned.
+
 ```go
 // Make request
 err := client.Request(req, res)

@@ -23,11 +23,15 @@
 package pingo
 
 import (
+	"context"
 	"errors"
+	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -43,6 +47,7 @@ type (
 	}
 
 	request struct {
+		client      *client
 		method      string
 		baseUrl     string
 		path        string
@@ -50,14 +55,14 @@ type (
 		queryParams url.Values
 		timeout     time.Duration
 		body        any
+		cancel      context.CancelFunc
 	}
 
-	// TODO isError ?
-	response[T any] struct {
+	response struct {
 		status     string
 		statusCode int
 		headers    http.Header
-		body       T
+		body       []byte
 	}
 
 	Logger interface {
@@ -122,6 +127,7 @@ func (c *client) SetLogger(logger Logger) *client {
 
 func (c *client) NewRequest() *request {
 	return &request{
+		client:      c,
 		method:      "",
 		baseUrl:     c.baseUrl,
 		path:        "",
@@ -182,10 +188,73 @@ func (r *request) SetTimeout(timeout time.Duration) *request {
 	return r
 }
 
-func Do[T any](r *request) (*response[T], error) {
-	return nil, errors.New("TODO")
+func (r *request) Do() (*response, error) {
+	requestUrl := r.requestUrl()
+	requestBody := r.requestBody(r.body)
+	req, err := r.createRequest(requestUrl, requestBody)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := r.client.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	responseBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	return &response{
+		status:     resp.Status,
+		statusCode: resp.StatusCode,
+		headers:    resp.Header,
+		body:       responseBody,
+	}, nil
 }
 
-func DoAsync[T any](r *request) (<-chan response[T], error) {
-	return nil, errors.New("TODO")
+func (r *request) requestUrl() string {
+	return fmt.Sprintf("%s/%s", strings.TrimRight(r.baseUrl, "/"), strings.TrimLeft(r.path, "/"))
+}
+
+func (r *request) requestBody(body any) io.Reader {
+	if body == nil {
+		return http.NoBody
+	}
+
+	return nil
+}
+
+func (r *request) createRequest(url string, body io.Reader) (*http.Request, error) {
+	var (
+		req *http.Request
+		err error
+	)
+
+	if r.timeout > 0 {
+		req, err = http.NewRequest(r.method, url, body)
+	} else {
+		ctx, cancel := context.WithTimeoutCause(context.Background(), r.timeout, errors.New("request timed out"))
+		r.cancel = cancel
+		req, err = http.NewRequestWithContext(ctx, r.method, url, body)
+	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header = r.headers
+
+	query := req.URL.Query()
+	for k, vs := range r.queryParams {
+		for _, v := range vs {
+			query.Add(k, v)
+		}
+	}
+
+	req.URL.RawQuery = query.Encode()
+
+	return req, nil
 }

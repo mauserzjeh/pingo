@@ -23,7 +23,9 @@
 package pingo
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -31,6 +33,8 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"reflect"
+	"slices"
 	"strings"
 	"time"
 )
@@ -73,6 +77,11 @@ type (
 
 var (
 	defaultClient = newDefaultClient()
+)
+
+const (
+	ContentTypeJson = "application/json"
+	ContentTypeXml  = "application/xml"
 )
 
 func newDefaultClient() *client {
@@ -154,7 +163,13 @@ func (r *request) SetPath(path string) *request {
 }
 
 func (r *request) SetHeaders(headers http.Header) *request {
-	r.headers = headers
+	for k, vs := range headers {
+		if len(vs) == 0 {
+			continue
+		}
+
+		r.headers.Set(k, vs[0])
+	}
 	return r
 }
 
@@ -169,7 +184,13 @@ func (r *request) AddHeaders(headers http.Header) *request {
 }
 
 func (r *request) SetQueryParams(queryParams url.Values) *request {
-	r.queryParams = queryParams
+	for k, vs := range queryParams {
+		if len(vs) == 0 {
+			continue
+		}
+
+		r.queryParams.Set(k, vs[0])
+	}
 	return r
 }
 
@@ -190,7 +211,12 @@ func (r *request) SetTimeout(timeout time.Duration) *request {
 
 func (r *request) Do() (*response, error) {
 	requestUrl := r.requestUrl()
-	requestBody := r.requestBody(r.body)
+
+	requestBody, err := r.requestBody(r.body)
+	if err != nil {
+		return nil, err
+	}
+
 	req, err := r.createRequest(requestUrl, requestBody)
 	if err != nil {
 		return nil, err
@@ -219,12 +245,45 @@ func (r *request) requestUrl() string {
 	return fmt.Sprintf("%s/%s", strings.TrimRight(r.baseUrl, "/"), strings.TrimLeft(r.path, "/"))
 }
 
-func (r *request) requestBody(body any) io.Reader {
+func (r *request) requestBody(body any) (io.Reader, error) {
 	if body == nil {
-		return http.NoBody
+		return http.NoBody, nil
 	}
 
-	return nil
+	switch b := body.(type) {
+	case io.Reader:
+		return b, nil
+	case []byte:
+		return bytes.NewBuffer(b), nil
+	case string:
+		return bytes.NewBufferString(b), nil
+	default:
+		kind := kind(b)
+
+		// TODO json.Marshaler
+		// json
+		if r.isJson() && slices.Contains([]reflect.Kind{
+			reflect.Struct,
+			reflect.Array,
+			reflect.Map,
+			reflect.Slice,
+		},
+			kind) {
+
+			jb, err := json.Marshal(b)
+			if err != nil {
+				return nil, err
+			}
+
+			return bytes.NewBuffer(jb), nil
+		}
+
+		// TODO xml.Marshaler
+		// xml
+
+	}
+
+	return nil, fmt.Errorf("unsupported body type %T", body)
 }
 
 func (r *request) createRequest(url string, body io.Reader) (*http.Request, error) {
@@ -257,4 +316,16 @@ func (r *request) createRequest(url string, body io.Reader) (*http.Request, erro
 	req.URL.RawQuery = query.Encode()
 
 	return req, nil
+}
+
+func (r *request) isJson() bool {
+	return false
+}
+
+func (r *request) isXml() bool {
+	return false
+}
+
+func kind(v any) reflect.Kind {
+	return reflect.Indirect(reflect.ValueOf(v)).Type().Kind()
 }

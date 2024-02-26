@@ -36,7 +36,6 @@ import (
 	"net/url"
 	"os"
 	"reflect"
-	"slices"
 	"strings"
 	"time"
 )
@@ -60,7 +59,8 @@ type (
 		headers     http.Header
 		queryParams url.Values
 		timeout     time.Duration
-		body        any
+		body        *bytes.Buffer
+		bodyErr     error
 		cancel      context.CancelFunc
 	}
 
@@ -84,8 +84,9 @@ var (
 )
 
 const (
-	ContentTypeJson = "application/json"
-	ContentTypeXml  = "application/xml"
+	ContentTypeJson           = "application/json"
+	ContentTypeXml            = "application/xml"
+	ContentTypeFormUrlEncoded = "application/x-www-form-urlencoded"
 )
 
 func newDefaultClient() *client {
@@ -201,12 +202,59 @@ func (r *request) AddHeader(key, value string) *request {
 	return r
 }
 
-func (r *request) Json() *request {
-	return r.SetHeader(headerContentType, ContentTypeJson)
+func (r *request) Json(data any) *request {
+	r.resetBody()
+	r.SetHeader(headerContentType, ContentTypeJson)
+
+	b, err := json.Marshal(data)
+	if err != nil {
+		r.bodyErr = err
+		return r
+	}
+
+	r.body = bytes.NewBuffer(b)
+	return r
 }
 
-func (r *request) Xml() *request {
-	return r.SetHeader(headerContentType, ContentTypeXml)
+func (r *request) Xml(data any) *request {
+	r.resetBody()
+	r.SetHeader(headerContentType, ContentTypeXml)
+
+	b, err := xml.Marshal(data)
+	if err != nil {
+		r.bodyErr = err
+		return r
+	}
+
+	r.body = bytes.NewBuffer(b)
+	return r
+}
+
+func (r *request) FormUrlEncoded(data url.Values) *request {
+	r.resetBody()
+	r.SetHeader(headerContentType, ContentTypeFormUrlEncoded)
+
+	r.body = bytes.NewBufferString(data.Encode())
+	return r
+}
+
+func (r *request) Custom(f func() (*bytes.Buffer, error)) *request {
+	r.resetBody()
+
+	body, err := f()
+	if err != nil {
+		r.bodyErr = err
+		return r
+	}
+
+	r.body = body
+	return r
+}
+
+func (r *request) Raw(data []byte) *request {
+	r.resetBody()
+	r.body = bytes.NewBuffer(data)
+	return r
 }
 
 func (r *request) SetQueryParams(queryParams url.Values) *request {
@@ -290,40 +338,11 @@ func (r *request) requestBody() (io.Reader, error) {
 		return http.NoBody, nil
 	}
 
-	switch b := r.body.(type) {
-	case io.Reader:
-		return b, nil
-	case []byte:
-		return bytes.NewBuffer(b), nil
-	case string:
-		return bytes.NewBufferString(b), nil
-	default:
-		kind := kind(b)
-
-		// json
-		if r.isJson(kind) {
-
-			jb, err := json.Marshal(b)
-			if err != nil {
-				return nil, err
-			}
-
-			return bytes.NewBuffer(jb), nil
-		}
-
-		// xml
-		if r.isXml(kind) {
-			xb, err := xml.Marshal(b)
-			if err != nil {
-				return nil, err
-			}
-
-			return bytes.NewBuffer(xb), nil
-		}
-
+	if r.bodyErr != nil {
+		return nil, r.bodyErr
 	}
 
-	return nil, fmt.Errorf("unsupported body type %T", r.body)
+	return r.body, nil
 }
 
 func (r *request) createRequest(ctx context.Context, url string, body io.Reader) (*http.Request, error) {
@@ -358,19 +377,9 @@ func (r *request) createRequest(ctx context.Context, url string, body io.Reader)
 	return req, nil
 }
 
-func (r *request) isJson(kind reflect.Kind) bool {
-	_, isJsonMarshaler := r.body.(json.Marshaler)
-	return r.headers.Get(headerContentType) == ContentTypeJson && (slices.Contains([]reflect.Kind{
-		reflect.Struct,
-		reflect.Array,
-		reflect.Map,
-		reflect.Slice,
-	}, kind) || isJsonMarshaler)
-}
-
-func (r *request) isXml(kind reflect.Kind) bool {
-	_, isXmlMarshaler := r.body.(xml.Marshaler)
-	return r.headers.Get(headerContentType) == ContentTypeXml && (kind == reflect.Struct || isXmlMarshaler)
+func (r *request) resetBody() {
+	r.body = nil
+	r.bodyErr = nil
 }
 
 func kind(v any) reflect.Kind {

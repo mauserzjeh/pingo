@@ -89,6 +89,10 @@ const (
 	ContentTypeFormUrlEncoded = "application/x-www-form-urlencoded"
 )
 
+// ---------------------------------------------- //
+// Client                                         //
+// ---------------------------------------------- //
+
 func newDefaultClient() *client {
 	return &client{
 		client: &http.Client{},
@@ -155,6 +159,10 @@ func (c *client) NewRequest() *request {
 		body:        nil,
 	}
 }
+
+// ---------------------------------------------- //
+// Request                                        //
+// ---------------------------------------------- //
 
 func (r *request) SetMethod(method string) *request {
 	r.method = method
@@ -381,6 +389,34 @@ func (r *request) resetBody() {
 	r.body = nil
 	r.bodyErr = nil
 }
+
+// ---------------------------------------------- //
+// Response                                       //
+// ---------------------------------------------- //
+
+func (r *response) Status() string {
+	return r.status
+}
+
+func (r *response) StatusCode() int {
+	return r.statusCode
+}
+
+func (r *response) Headers() http.Header {
+	return r.headers
+}
+
+func (r *response) Body() []byte {
+	return r.body
+}
+
+func (r *response) IsError() bool {
+	return r.statusCode < 200 || r.statusCode > 299
+}
+
+// ---------------------------------------------- //
+// Helpers                                        //
+// ---------------------------------------------- //
 
 func kind(v any) reflect.Kind {
 	return reflect.Indirect(reflect.ValueOf(v)).Type().Kind()

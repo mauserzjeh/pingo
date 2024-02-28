@@ -75,6 +75,10 @@ type (
 		Debug(msg string, args ...any)
 		Info(msg string, args ...any)
 	}
+
+	ResponseUnmarshaler interface {
+		UnmarshalResponse(*response) error
+	}
 )
 
 var (
@@ -210,7 +214,7 @@ func (r *request) AddHeader(key, value string) *request {
 	return r
 }
 
-func (r *request) Json(data any) *request {
+func (r *request) BodyJson(data any) *request {
 	r.resetBody()
 	r.SetHeader(headerContentType, ContentTypeJson)
 
@@ -224,7 +228,7 @@ func (r *request) Json(data any) *request {
 	return r
 }
 
-func (r *request) Xml(data any) *request {
+func (r *request) BodyXml(data any) *request {
 	r.resetBody()
 	r.SetHeader(headerContentType, ContentTypeXml)
 
@@ -238,7 +242,7 @@ func (r *request) Xml(data any) *request {
 	return r
 }
 
-func (r *request) FormUrlEncoded(data url.Values) *request {
+func (r *request) BodyFormUrlEncoded(data url.Values) *request {
 	r.resetBody()
 	r.SetHeader(headerContentType, ContentTypeFormUrlEncoded)
 
@@ -246,7 +250,7 @@ func (r *request) FormUrlEncoded(data url.Values) *request {
 	return r
 }
 
-func (r *request) Custom(f func() (*bytes.Buffer, error)) *request {
+func (r *request) BodyCustom(f func() (*bytes.Buffer, error)) *request {
 	r.resetBody()
 
 	body, err := f()
@@ -259,7 +263,7 @@ func (r *request) Custom(f func() (*bytes.Buffer, error)) *request {
 	return r
 }
 
-func (r *request) Raw(data []byte) *request {
+func (r *request) BodyRaw(data []byte) *request {
 	r.resetBody()
 	r.body = bytes.NewBuffer(data)
 	return r
@@ -406,12 +410,24 @@ func (r *response) Headers() http.Header {
 	return r.headers
 }
 
-func (r *response) Body() []byte {
+func (r *response) BodyRaw() []byte {
 	return r.body
 }
 
-func (r *response) IsError() bool {
-	return r.statusCode < 200 || r.statusCode > 299
+func (r *response) BodyString() string {
+	return string(r.body)
+}
+
+func (r *response) IsError() error {
+	if r.statusCode < 200 || r.statusCode >= 400 {
+		return fmt.Errorf("%s", r.body)
+	}
+
+	return nil
+}
+
+func (r *response) Unmarshal(u ResponseUnmarshaler) error {
+	return u.UnmarshalResponse(r)
 }
 
 // ---------------------------------------------- //

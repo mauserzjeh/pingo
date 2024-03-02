@@ -31,10 +31,12 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"mime/multipart"
 	"net/http"
 	"net/textproto"
 	"net/url"
 	"os"
+	"path"
 	"reflect"
 	"strings"
 	"time"
@@ -64,11 +66,21 @@ type (
 		cancel      context.CancelFunc
 	}
 
-	response struct {
+	responseHeader struct {
 		status     string
 		statusCode int
 		headers    http.Header
-		body       []byte
+	}
+
+	responseStream struct {
+		responseHeader
+		cancel context.CancelFunc
+		body   io.ReadCloser
+	}
+
+	response struct {
+		responseHeader
+		body []byte
 	}
 
 	Logger interface {
@@ -76,21 +88,33 @@ type (
 		Info(msg string, args ...any)
 	}
 
-	ResponseUnmarshaler interface {
-		UnmarshalResponse(*response) error
+	ResponseUnmarshaler func(*response) error
+	StreamReceiver      func(r io.Reader) error
+
+	multipartFormFile struct {
+		reader    io.Reader
+		filePath  string
+		fieldName string
+		fileName  string
 	}
 )
 
 var (
 	defaultClient = newDefaultClient()
 
-	headerContentType = textproto.CanonicalMIMEHeaderKey("Content-Type")
+	headerContentType  = textproto.CanonicalMIMEHeaderKey("Content-Type")
+	headerAccept       = textproto.CanonicalMIMEHeaderKey("Accept")
+	headerCacheControl = textproto.CanonicalMIMEHeaderKey("Cache-Control")
+	headerConnection   = textproto.CanonicalMIMEHeaderKey("Connection")
+
+	ErrRequestTimedOut = errors.New("request timed out")
 )
 
 const (
-	ContentTypeJson           = "application/json"
-	ContentTypeXml            = "application/xml"
-	ContentTypeFormUrlEncoded = "application/x-www-form-urlencoded"
+	ContentTypeJson            = "application/json"
+	ContentTypeXml             = "application/xml"
+	ContentTypeFormUrlEncoded  = "application/x-www-form-urlencoded"
+	ContentTypeTextEventStream = "text/event-stream"
 )
 
 // ---------------------------------------------- //
@@ -269,6 +293,40 @@ func (r *request) BodyRaw(data []byte) *request {
 	return r
 }
 
+func (r *request) BodyMultipartForm(data map[string]any, files ...multipartFormFile) *request {
+	r.resetBody()
+	body := &bytes.Buffer{}
+	w := multipart.NewWriter(body)
+
+	// handle data
+	for fieldName, value := range data {
+		err := w.WriteField(fieldName, fmt.Sprint(value))
+		if err != nil {
+			r.bodyErr = err
+			return r
+		}
+	}
+
+	// handle files
+	for _, file := range files {
+		err := file.Write(w)
+		if err != nil {
+			r.bodyErr = err
+			return r
+		}
+	}
+
+	err := w.Close()
+	if err != nil {
+		r.bodyErr = err
+		return r
+	}
+
+	r.body = body
+	r.SetHeader(headerContentType, w.FormDataContentType())
+	return r
+}
+
 func (r *request) SetQueryParams(queryParams url.Values) *request {
 	for k, vs := range queryParams {
 		if len(vs) == 0 {
@@ -305,7 +363,7 @@ func (r *request) SetTimeout(timeout time.Duration) *request {
 	return r
 }
 
-func (r *request) DoCtx(ctx context.Context) (*response, error) {
+func (r *request) do(ctx context.Context) (*http.Response, error) {
 	requestUrl := r.requestUrl()
 
 	requestBody, err := r.requestBody()
@@ -322,6 +380,18 @@ func (r *request) DoCtx(ctx context.Context) (*response, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	return resp, nil
+}
+
+func (r *request) DoCtx(ctx context.Context) (*response, error) {
+	resp, err := r.do(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if r.cancel != nil {
+		defer r.cancel()
+	}
 	defer resp.Body.Close()
 
 	responseBody, err := io.ReadAll(resp.Body)
@@ -330,15 +400,37 @@ func (r *request) DoCtx(ctx context.Context) (*response, error) {
 	}
 
 	return &response{
-		status:     resp.Status,
-		statusCode: resp.StatusCode,
-		headers:    resp.Header,
-		body:       responseBody,
+		responseHeader: responseHeader{
+			status:     resp.Status,
+			statusCode: resp.StatusCode,
+			headers:    resp.Header,
+		},
+		body: responseBody,
 	}, nil
 }
 
 func (r *request) Do() (*response, error) {
 	return r.DoCtx(context.Background())
+}
+
+func (r *request) DoStream(ctx context.Context) (*responseStream, error) {
+	r.headers.Set(headerAccept, ContentTypeTextEventStream)
+	r.headers.Set(headerCacheControl, "no-cache")
+	r.headers.Set(headerConnection, "keep-alive")
+
+	resp, err := r.do(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	return &responseStream{
+		responseHeader: responseHeader{
+			status:     resp.Status,
+			statusCode: resp.StatusCode,
+			headers:    resp.Header,
+		},
+		body: resp.Body,
+	}, nil
 }
 
 func (r *request) requestUrl() string {
@@ -359,18 +451,20 @@ func (r *request) requestBody() (io.Reader, error) {
 
 func (r *request) createRequest(ctx context.Context, url string, body io.Reader) (*http.Request, error) {
 	var (
-		req *http.Request
-		err error
+		req  *http.Request
+		err  error
+		rctx context.Context
 	)
 
 	if r.timeout > 0 {
-		req, err = http.NewRequestWithContext(ctx, r.method, url, body)
-	} else {
-		tctx, cancel := context.WithTimeoutCause(ctx, r.timeout, errors.New("request timed out"))
+		tctx, cancel := context.WithTimeoutCause(ctx, r.timeout, ErrRequestTimedOut)
 		r.cancel = cancel
-		req, err = http.NewRequestWithContext(tctx, r.method, url, body)
+		rctx = tctx
+	} else {
+		rctx = ctx
 	}
 
+	req, err = http.NewRequestWithContext(rctx, r.method, url, body)
 	if err != nil {
 		return nil, err
 	}
@@ -395,20 +489,28 @@ func (r *request) resetBody() {
 }
 
 // ---------------------------------------------- //
-// Response                                       //
+// ResponseHeader                                 //
 // ---------------------------------------------- //
 
-func (r *response) Status() string {
+func (r *responseHeader) Status() string {
 	return r.status
 }
 
-func (r *response) StatusCode() int {
+func (r *responseHeader) StatusCode() int {
 	return r.statusCode
 }
 
-func (r *response) Headers() http.Header {
+func (r *responseHeader) Headers() http.Header {
 	return r.headers
 }
+
+func (r *responseHeader) GetHeader(key string) string {
+	return r.headers.Get(key)
+}
+
+// ---------------------------------------------- //
+// Response                                       //
+// ---------------------------------------------- //
 
 func (r *response) BodyRaw() []byte {
 	return r.body
@@ -427,7 +529,74 @@ func (r *response) IsError() error {
 }
 
 func (r *response) Unmarshal(u ResponseUnmarshaler) error {
-	return u.UnmarshalResponse(r)
+	return u(r)
+}
+
+// ---------------------------------------------- //
+// ResponseStream                                 //
+// ---------------------------------------------- //
+
+func (r *responseStream) RecvReceiver(sr StreamReceiver) error {
+	return sr(r.body)
+}
+
+func (r *responseStream) Recv(n uint) ([]byte, error) {
+	b := make([]byte, n)
+	nn, err := r.body.Read(b)
+	if err != nil {
+		return nil, err
+	}
+	return b[:nn], nil
+}
+
+func (r *responseStream) Close() {
+	r.body.Close()
+	if r.cancel != nil {
+		r.cancel()
+	}
+}
+
+// ---------------------------------------------- //
+// MultipartFormFile                              //
+// ---------------------------------------------- //
+
+func NewMultipartFormFile(name string, filePath string) multipartFormFile {
+	return multipartFormFile{
+		filePath:  filePath,
+		fieldName: name,
+	}
+}
+
+func NewMultipartFormFileReader(name, fileName string, r io.Reader) multipartFormFile {
+	return multipartFormFile{
+		reader:    r,
+		fieldName: name,
+		fileName:  fileName,
+	}
+}
+
+func (f *multipartFormFile) Write(w *multipart.Writer) error {
+	if f.reader == nil {
+		ff, err := os.Open(f.filePath)
+		if err != nil {
+			return err
+		}
+		defer ff.Close()
+		f.reader = ff
+		f.fileName = path.Base(ff.Name())
+	}
+
+	pw, err := w.CreateFormFile(f.fieldName, f.fileName)
+	if err != nil {
+		return err
+	}
+
+	_, err = io.Copy(pw, f.reader)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // ---------------------------------------------- //

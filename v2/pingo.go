@@ -37,7 +37,6 @@ import (
 	"net/url"
 	"os"
 	"path"
-	"reflect"
 	"strings"
 	"time"
 )
@@ -106,8 +105,11 @@ var (
 	headerAccept       = textproto.CanonicalMIMEHeaderKey("Accept")
 	headerCacheControl = textproto.CanonicalMIMEHeaderKey("Cache-Control")
 	headerConnection   = textproto.CanonicalMIMEHeaderKey("Connection")
+	headerUserAgent    = textproto.CanonicalMIMEHeaderKey("User-Agent")
 
 	ErrRequestTimedOut = errors.New("request timed out")
+
+	headerUserAgentDefaultValue = "pingo " + version + " (github.com/mauserzjeh/pingo)"
 )
 
 const (
@@ -115,6 +117,8 @@ const (
 	ContentTypeXml             = "application/xml"
 	ContentTypeFormUrlEncoded  = "application/x-www-form-urlencoded"
 	ContentTypeTextEventStream = "text/event-stream"
+
+	version = "v2.0.0"
 )
 
 // ---------------------------------------------- //
@@ -122,12 +126,18 @@ const (
 // ---------------------------------------------- //
 
 func newDefaultClient() *client {
-	return &client{
+	c := &client{
 		client: &http.Client{},
 		logger: slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
 			Level: slog.LevelDebug,
 		})),
+		headers:     make(http.Header),
+		queryParams: make(url.Values),
 	}
+
+	c.headers.Set(headerUserAgent, headerUserAgentDefaultValue)
+
+	return c
 }
 
 func NewClient() *client {
@@ -151,12 +161,42 @@ func (c *client) SetBaseUrl(baseUrl string) *client {
 }
 
 func (c *client) SetHeaders(headers http.Header) *client {
-	c.headers = headers
+	setValues(headers, c.headers)
+	return c
+}
+
+func (c *client) SetHeader(key, value string) *client {
+	c.headers.Set(key, value)
+	return c
+}
+
+func (c *client) AddHeaders(headers http.Header) *client {
+	addValues(headers, c.headers)
+	return c
+}
+
+func (c *client) AddHeader(key, value string) *client {
+	c.headers.Add(key, value)
 	return c
 }
 
 func (c *client) SetQueryParams(queryParams url.Values) *client {
-	c.queryParams = queryParams
+	setValues(queryParams, c.queryParams)
+	return c
+}
+
+func (c *client) SetQueryParam(key, value string) *client {
+	c.queryParams.Set(key, value)
+	return c
+}
+
+func (c *client) AddQueryParams(queryParams url.Values) *client {
+	addValues(queryParams, c.queryParams)
+	return c
+}
+
+func (c *client) AddQueryParam(key, value string) *client {
+	c.queryParams.Add(key, value)
 	return c
 }
 
@@ -208,13 +248,7 @@ func (r *request) SetPath(path string) *request {
 }
 
 func (r *request) SetHeaders(headers http.Header) *request {
-	for k, vs := range headers {
-		if len(vs) == 0 {
-			continue
-		}
-
-		r.headers.Set(k, vs[0])
-	}
+	setValues(headers, r.headers)
 	return r
 }
 
@@ -224,17 +258,37 @@ func (r *request) SetHeader(key, value string) *request {
 }
 
 func (r *request) AddHeaders(headers http.Header) *request {
-	for k, vs := range headers {
-		for _, v := range vs {
-			r.headers.Add(k, v)
-		}
-	}
-
+	addValues(headers, r.headers)
 	return r
 }
 
 func (r *request) AddHeader(key, value string) *request {
 	r.headers.Add(key, value)
+	return r
+}
+
+func (r *request) SetQueryParams(queryParams url.Values) *request {
+	setValues(queryParams, r.queryParams)
+	return r
+}
+
+func (r *request) SetQueryParam(key, value string) *request {
+	r.queryParams.Set(key, value)
+	return r
+}
+
+func (r *request) AddQueryParams(queryParams url.Values) *request {
+	addValues(queryParams, r.queryParams)
+	return r
+}
+
+func (r *request) AddQueryParam(key, value string) *request {
+	r.queryParams.Add(key, value)
+	return r
+}
+
+func (r *request) SetTimeout(timeout time.Duration) *request {
+	r.timeout = timeout
 	return r
 }
 
@@ -324,42 +378,6 @@ func (r *request) BodyMultipartForm(data map[string]any, files ...multipartFormF
 
 	r.body = body
 	r.SetHeader(headerContentType, w.FormDataContentType())
-	return r
-}
-
-func (r *request) SetQueryParams(queryParams url.Values) *request {
-	for k, vs := range queryParams {
-		if len(vs) == 0 {
-			continue
-		}
-
-		r.queryParams.Set(k, vs[0])
-	}
-	return r
-}
-
-func (r *request) SetQueryParam(key, value string) *request {
-	r.queryParams.Set(key, value)
-	return r
-}
-
-func (r *request) AddQueryParams(queryParams url.Values) *request {
-	for k, vs := range queryParams {
-		for _, v := range vs {
-			r.queryParams.Add(k, v)
-		}
-	}
-
-	return r
-}
-
-func (r *request) AddQueryParam(key, value string) *request {
-	r.queryParams.Add(key, value)
-	return r
-}
-
-func (r *request) SetTimeout(timeout time.Duration) *request {
-	r.timeout = timeout
 	return r
 }
 
@@ -603,6 +621,50 @@ func (f *multipartFormFile) Write(w *multipart.Writer) error {
 // Helpers                                        //
 // ---------------------------------------------- //
 
-func kind(v any) reflect.Kind {
-	return reflect.Indirect(reflect.ValueOf(v)).Type().Kind()
+func setValues[T http.Header | url.Values](src, dst T) {
+	switch src := any(src).(type) {
+	case http.Header:
+		if dst, ok := any(dst).(http.Header); ok {
+			for k, vs := range src {
+				if len(vs) == 0 || vs[0] == "" {
+					dst.Del(k)
+					continue
+				}
+
+				dst.Set(k, vs[0])
+			}
+		}
+	case url.Values:
+		if dst, ok := any(dst).(url.Values); ok {
+			for k, vs := range src {
+				if len(vs) == 0 || vs[0] == "" {
+					dst.Del(k)
+					continue
+				}
+
+				dst.Set(k, vs[0])
+			}
+		}
+	}
+}
+
+func addValues[T http.Header | url.Values](src, dst T) {
+	switch src := any(src).(type) {
+	case http.Header:
+		if dst, ok := any(dst).(http.Header); ok {
+			for k, vs := range src {
+				for _, v := range vs {
+					dst.Add(k, v)
+				}
+			}
+		}
+	case url.Values:
+		if dst, ok := any(dst).(url.Values); ok {
+			for k, vs := range src {
+				for _, v := range vs {
+					dst.Add(k, v)
+				}
+			}
+		}
+	}
 }

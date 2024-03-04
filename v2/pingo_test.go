@@ -1,6 +1,7 @@
 package pingo
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -33,6 +34,11 @@ func testServer(t *testing.T) *httptest.Server {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/echo", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
 		b, err := io.ReadAll(r.Body)
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
@@ -48,6 +54,11 @@ func testServer(t *testing.T) *httptest.Server {
 
 		w.WriteHeader(http.StatusOK)
 		w.Write(b)
+	})
+
+	mux.HandleFunc("/ping", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("pong"))
 	})
 
 	server := httptest.NewServer(mux)
@@ -187,4 +198,86 @@ func TestRequestSettings(t *testing.T) {
 	timeout := 5 * time.Second
 	r.SetTimeout(timeout)
 	assertEqual(t, r.timeout, timeout)
+}
+
+func TestEmptyRequest(t *testing.T) {
+	server := testServer(t)
+	defer server.Close()
+
+	resp, err := NewClient().SetBaseUrl(server.URL).NewRequest().SetPath("/ping").Do()
+	assertEqual(t, err, nil)
+	assertNotEqual(t, resp, nil)
+	if err != nil {
+		return
+	}
+
+	assertEqual(t, resp.StatusCode(), http.StatusOK)
+	assertEqual(t, resp.BodyString(), "pong")
+}
+
+func TestJsonRequest(t *testing.T) {
+	server := testServer(t)
+	defer server.Close()
+
+	type req struct {
+		Foo string `json:"foo"`
+		Bar string `json:"bar"`
+	}
+
+	r := req{
+		Foo: "foo",
+		Bar: "bar",
+	}
+
+	resp, err := NewClient().
+		SetBaseUrl(server.URL).
+		NewRequest().
+		SetPath("/echo").
+		SetMethod(http.MethodPost).
+		BodyJson(r).
+		Do()
+
+	assertNotEqual(t, resp, nil)
+	assertEqual(t, err, nil)
+	if err != nil {
+		return
+	}
+
+	assertEqual(t, resp.Status(), fmt.Sprintf("%v %s", http.StatusOK, http.StatusText(http.StatusOK)))
+	assertEqual(t, resp.StatusCode(), http.StatusOK)
+	assertEqual(t, resp.GetHeader(headerUserAgent), headerUserAgentDefaultValue)
+
+	rr := req{}
+	err = json.Unmarshal(resp.BodyRaw(), &rr)
+	assertEqual(t, err, nil)
+	if err != nil {
+		return
+	}
+
+	assertEqual(t, reflect.DeepEqual(r, rr), true)
+}
+
+func TestRawRequest(t *testing.T) {
+	server := testServer(t)
+	defer server.Close()
+
+	body := []byte("echo")
+
+	resp, err := NewClient().
+		SetBaseUrl(server.URL).
+		NewRequest().
+		SetPath("/echo").
+		SetMethod(http.MethodPost).
+		BodyRaw(body).
+		Do()
+
+	assertNotEqual(t, resp, nil)
+	assertEqual(t, err, nil)
+	if err != nil {
+		return
+	}
+
+	assertEqual(t, resp.StatusCode(), http.StatusOK)
+	assertEqual(t, resp.Headers().Get(headerUserAgent), headerUserAgentDefaultValue)
+	assertEqual(t, reflect.DeepEqual(resp.BodyRaw(), body), true)
 }

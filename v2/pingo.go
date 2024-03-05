@@ -146,10 +146,6 @@ func NewClient() *client {
 	return c
 }
 
-func Client() *client {
-	return defaultClient
-}
-
 func (c *client) SetClient(client *http.Client) *client {
 	c.client = client
 	return c
@@ -231,6 +227,10 @@ func (c *client) NewRequest() *request {
 // ---------------------------------------------- //
 // Request                                        //
 // ---------------------------------------------- //
+
+func NewRequest() *request {
+	return defaultClient.NewRequest()
+}
 
 func (r *request) SetMethod(method string) *request {
 	r.method = method
@@ -456,12 +456,12 @@ func (r *request) requestUrl() string {
 }
 
 func (r *request) requestBody() (io.Reader, error) {
-	if r.body == nil {
-		return http.NoBody, nil
-	}
-
 	if r.bodyErr != nil {
 		return nil, r.bodyErr
+	}
+
+	if r.body == nil {
+		return http.NoBody, nil
 	}
 
 	return r.body, nil

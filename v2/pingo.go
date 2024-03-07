@@ -63,6 +63,7 @@ type (
 		body        *bytes.Buffer
 		bodyErr     error
 		cancel      context.CancelFunc
+		ctx         context.Context
 	}
 
 	responseHeader struct {
@@ -214,13 +215,16 @@ func (c *client) SetLogger(logger Logger) *client {
 func (c *client) NewRequest() *request {
 	return &request{
 		client:      c,
-		method:      "",
+		method:      http.MethodGet,
 		baseUrl:     c.baseUrl,
 		path:        "",
 		headers:     c.headers,
 		queryParams: c.queryParams,
 		timeout:     c.timeout,
 		body:        nil,
+		bodyErr:     nil,
+		cancel:      nil,
+		ctx:         nil,
 	}
 }
 
@@ -233,7 +237,9 @@ func NewRequest() *request {
 }
 
 func (r *request) SetMethod(method string) *request {
-	r.method = method
+	if method != "" {
+		r.method = method
+	}
 	return r
 }
 
@@ -398,6 +404,12 @@ func (r *request) do(ctx context.Context) (*http.Response, error) {
 
 	resp, err := r.client.client.Do(req)
 	if err != nil {
+		select {
+		case <-r.ctx.Done():
+			err = fmt.Errorf("%v \"%v\": %w", strings.ToUpper(r.method), requestUrl, context.Cause(r.ctx))
+		default:
+		}
+
 		return nil, err
 	}
 
@@ -454,8 +466,24 @@ func (r *request) DoStream(ctx context.Context) (*responseStream, error) {
 }
 
 func (r *request) requestUrl() string {
-	// TODO
-	return fmt.Sprintf("%s/%s", strings.TrimRight(r.baseUrl, "/"), strings.TrimLeft(r.path, "/"))
+	b := strings.Builder{}
+
+	baseUrl := strings.TrimRight(r.baseUrl, "/")
+	if baseUrl != "" {
+		b.WriteString(baseUrl)
+	}
+
+	path := strings.TrimLeft(r.path, "/")
+	if path != "" {
+
+		if b.Len() > 0 {
+			b.WriteString("/")
+		}
+
+		b.WriteString(path)
+	}
+
+	return b.String()
 }
 
 func (r *request) requestBody() (io.Reader, error) {
@@ -485,6 +513,7 @@ func (r *request) createRequest(ctx context.Context, url string, body io.Reader)
 		rctx = ctx
 	}
 
+	r.ctx = rctx
 	req, err = http.NewRequestWithContext(rctx, r.method, url, body)
 	if err != nil {
 		return nil, err

@@ -69,6 +69,12 @@ func testServer(t *testing.T) *httptest.Server {
 		w.Write([]byte("pong"))
 	})
 
+	mux.HandleFunc("/timeout", func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(1 * time.Second)
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("zzz"))
+	})
+
 	mux.HandleFunc("/multipart-form", func(w http.ResponseWriter, r *http.Request) {
 		err := r.ParseMultipartForm(4096)
 		if err != nil {
@@ -428,23 +434,16 @@ func TestBodyMultipartForm(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// TODO
-	for i, req := range []*request{
-		NewRequest().
-			SetBaseUrl(server.URL).
-			SetPath("/multipart-form").
-			SetMethod(http.MethodPost).
-			BodyMultipartForm(data, NewMultipartFormFile("file", "testdata/file.txt")),
-
-		NewRequest().
-			SetBaseUrl(server.URL).
-			SetPath("/multipart-form").
-			SetMethod(http.MethodPost).
-			BodyMultipartForm(data, NewMultipartFormFileReader("file", "file.txt", bytes.NewReader(file))),
+	for i, f := range []multipartFormFile{
+		NewMultipartFormFile("file", "testdata/file.txt"),
+		NewMultipartFormFileReader("file", "file.txt", bytes.NewReader(file)),
 	} {
-
 		t.Run(fmt.Sprintf("multipart-form-%d", i), func(t *testing.T) {
-			resp, err := req.Do()
+			resp, err := NewRequest().
+				SetBaseUrl(server.URL).
+				SetPath("/multipart-form").
+				SetMethod(http.MethodPost).
+				BodyMultipartForm(data, f).Do()
 
 			if err != nil {
 				t.Fatal(err)
@@ -468,4 +467,22 @@ func TestBodyMultipartForm(t *testing.T) {
 			assertEqual(t, r.FileContent, "abcdefghijklmnopqrstuvwxyz0123456789")
 		})
 	}
+}
+
+func TestTimeout(t *testing.T) {
+	server := testServer(t)
+	defer server.Close()
+
+	resp, err := NewRequest().
+		SetBaseUrl(server.URL).
+		SetPath("/timeout").
+		SetTimeout(500 * time.Millisecond).
+		Do()
+
+	if err == nil {
+		t.Fatal("err is nil")
+	}
+
+	assertEqual(t, resp, nil)
+	assertEqual(t, errors.Is(err, ErrRequestTimedOut), true)
 }

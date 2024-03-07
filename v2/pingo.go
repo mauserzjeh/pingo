@@ -357,6 +357,7 @@ func (r *request) BodyMultipartForm(data map[string]any, files ...multipartFormF
 		err := w.WriteField(fieldName, fmt.Sprint(value))
 		if err != nil {
 			r.bodyErr = err
+			w.Close()
 			return r
 		}
 	}
@@ -366,6 +367,7 @@ func (r *request) BodyMultipartForm(data map[string]any, files ...multipartFormF
 		err := file.Write(w)
 		if err != nil {
 			r.bodyErr = err
+			w.Close()
 			return r
 		}
 	}
@@ -452,6 +454,7 @@ func (r *request) DoStream(ctx context.Context) (*responseStream, error) {
 }
 
 func (r *request) requestUrl() string {
+	// TODO
 	return fmt.Sprintf("%s/%s", strings.TrimRight(r.baseUrl, "/"), strings.TrimLeft(r.path, "/"))
 }
 

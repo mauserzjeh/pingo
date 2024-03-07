@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"reflect"
 	"testing"
 	"time"
@@ -36,16 +37,20 @@ func testServer(t *testing.T) *httptest.Server {
 
 	mux := http.NewServeMux()
 
+	sendError := func(w http.ResponseWriter, code int) {
+		w.WriteHeader(code)
+		w.Write([]byte("error"))
+	}
+
 	mux.HandleFunc("/echo", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
-			w.WriteHeader(http.StatusBadRequest)
+			sendError(w, http.StatusBadRequest)
 			return
 		}
 
 		b, err := io.ReadAll(r.Body)
 		if err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			w.Write([]byte("error"))
+			sendError(w, http.StatusInternalServerError)
 			return
 		}
 
@@ -62,6 +67,40 @@ func testServer(t *testing.T) *httptest.Server {
 	mux.HandleFunc("/ping", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("pong"))
+	})
+
+	mux.HandleFunc("/multipart-form", func(w http.ResponseWriter, r *http.Request) {
+		err := r.ParseMultipartForm(4096)
+		if err != nil {
+			sendError(w, http.StatusInternalServerError)
+			return
+		}
+		value := r.PostFormValue("value")
+		file, fileHeader, err := r.FormFile("file")
+		if err != nil {
+			sendError(w, http.StatusInternalServerError)
+			return
+		}
+
+		buf := bytes.NewBuffer(nil)
+		if _, err := io.Copy(buf, file); err != nil {
+			sendError(w, http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set(headerContentType, ContentTypeJson)
+		w.WriteHeader(http.StatusOK)
+		if err := json.NewEncoder(w).Encode(struct {
+			Value       string `json:"value"`
+			FileName    string `json:"filename"`
+			FileContent string `json:"filecontent"`
+		}{
+			Value:       value,
+			FileName:    fileHeader.Filename,
+			FileContent: buf.String(),
+		}); err != nil {
+			t.Fatal(err)
+		}
 	})
 
 	server := httptest.NewServer(mux)
@@ -377,4 +416,56 @@ func TestCustomRequest(t *testing.T) {
 
 	assertEqual(t, err.Error(), e)
 	assertEqual(t, resp, nil)
+}
+
+func TestBodyMultipartForm(t *testing.T) {
+	server := testServer(t)
+	defer server.Close()
+
+	data := map[string]any{"value": "foo"}
+	file, err := os.ReadFile("testdata/file.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// TODO
+	for i, req := range []*request{
+		NewRequest().
+			SetBaseUrl(server.URL).
+			SetPath("/multipart-form").
+			SetMethod(http.MethodPost).
+			BodyMultipartForm(data, NewMultipartFormFile("file", "testdata/file.txt")),
+
+		NewRequest().
+			SetBaseUrl(server.URL).
+			SetPath("/multipart-form").
+			SetMethod(http.MethodPost).
+			BodyMultipartForm(data, NewMultipartFormFileReader("file", "file.txt", bytes.NewReader(file))),
+	} {
+
+		t.Run(fmt.Sprintf("multipart-form-%d", i), func(t *testing.T) {
+			resp, err := req.Do()
+
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			assertEqual(t, resp.StatusCode(), http.StatusOK)
+
+			var r struct {
+				Value       string `json:"value"`
+				FileName    string `json:"filename"`
+				FileContent string `json:"filecontent"`
+			}
+
+			err = json.Unmarshal(resp.BodyRaw(), &r)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			assertEqual(t, r.Value, "foo")
+			assertEqual(t, r.FileName, "file.txt")
+			assertEqual(t, r.FileContent, "abcdefghijklmnopqrstuvwxyz0123456789")
+		})
+	}
 }

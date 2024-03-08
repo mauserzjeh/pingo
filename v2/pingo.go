@@ -23,6 +23,7 @@
 package pingo
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -74,8 +75,9 @@ type (
 
 	responseStream struct {
 		responseHeader
-		cancel context.CancelFunc
-		body   io.ReadCloser
+		cancel   context.CancelFunc
+		reader   *bufio.Reader
+		response *http.Response
 	}
 
 	response struct {
@@ -89,7 +91,7 @@ type (
 	}
 
 	ResponseUnmarshaler func(*response) error
-	StreamReceiver      func(r io.Reader) error
+	StreamReceiver      func(r *bufio.Reader) error
 
 	multipartFormFile struct {
 		reader    io.Reader
@@ -422,7 +424,7 @@ func (r *request) DoCtx(ctx context.Context) (*response, error) {
 		return nil, err
 	}
 	if r.cancel != nil {
-		defer r.cancel()
+		r.cancel()
 	}
 	defer resp.Body.Close()
 
@@ -461,7 +463,9 @@ func (r *request) DoStream(ctx context.Context) (*responseStream, error) {
 			statusCode: resp.StatusCode,
 			headers:    resp.Header,
 		},
-		body: resp.Body,
+		reader:   bufio.NewReader(resp.Body),
+		response: resp,
+		cancel:   r.cancel,
 	}, nil
 }
 
@@ -586,13 +590,13 @@ func (r *response) Unmarshal(u ResponseUnmarshaler) error {
 // ResponseStream                                 //
 // ---------------------------------------------- //
 
-func (r *responseStream) RecvReceiver(sr StreamReceiver) error {
-	return sr(r.body)
+func (r *responseStream) RecvFunc(sr StreamReceiver) error {
+	return sr(r.reader)
 }
 
 func (r *responseStream) Recv(n uint) ([]byte, error) {
 	b := make([]byte, n)
-	nn, err := r.body.Read(b)
+	nn, err := r.reader.Read(b)
 	if err != nil {
 		return nil, err
 	}
@@ -600,7 +604,7 @@ func (r *responseStream) Recv(n uint) ([]byte, error) {
 }
 
 func (r *responseStream) Close() {
-	r.body.Close()
+	r.response.Body.Close()
 	if r.cancel != nil {
 		r.cancel()
 	}

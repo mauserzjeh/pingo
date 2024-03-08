@@ -1,7 +1,9 @@
 package pingo
 
 import (
+	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"encoding/xml"
 	"errors"
@@ -24,13 +26,13 @@ func assertEqual[T comparable](t testing.TB, got, want T) {
 	}
 }
 
-// assertNotEqual fails if the two values are equal
-func assertNotEqual[T comparable](t testing.TB, got, want T) {
-	t.Helper()
-	if got == want {
-		t.Errorf("didn't want %v", got)
-	}
-}
+// // assertNotEqual fails if the two values are equal
+// func assertNotEqual[T comparable](t testing.TB, got, want T) {
+// 	t.Helper()
+// 	if got == want {
+// 		t.Errorf("didn't want %v", got)
+// 	}
+// }
 
 func testServer(t *testing.T) *httptest.Server {
 	t.Helper()
@@ -41,6 +43,10 @@ func testServer(t *testing.T) *httptest.Server {
 		w.WriteHeader(code)
 		w.Write([]byte("error"))
 	}
+
+	mux.HandleFunc("/error", func(w http.ResponseWriter, r *http.Request) {
+		sendError(w, http.StatusInternalServerError)
+	})
 
 	mux.HandleFunc("/echo", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -73,6 +79,21 @@ func testServer(t *testing.T) *httptest.Server {
 		time.Sleep(1 * time.Second)
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("zzz"))
+	})
+
+	mux.HandleFunc("/stream", func(w http.ResponseWriter, r *http.Request) {
+		str := "abcdefghijklmnopqrstuvwxyz0123456789"
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		w.Header().Set("Transfer-Encoding", "chunked")
+		w.WriteHeader(http.StatusOK)
+
+		for _, c := range str {
+			fmt.Fprintf(w, "%c", c)
+			time.Sleep(5 * time.Millisecond)
+		}
 	})
 
 	mux.HandleFunc("/multipart-form", func(w http.ResponseWriter, r *http.Request) {
@@ -311,6 +332,7 @@ func TestRawRequest(t *testing.T) {
 		SetBaseUrl(server.URL).
 		SetPath("/echo").
 		SetMethod(http.MethodPost).
+		SetTimeout(5 * time.Second).
 		BodyRaw(body).
 		Do()
 
@@ -320,6 +342,7 @@ func TestRawRequest(t *testing.T) {
 	}
 
 	assertEqual(t, resp.StatusCode(), http.StatusOK)
+	assertEqual(t, resp.IsError(), nil)
 	assertEqual(t, resp.Headers().Get(headerUserAgent), headerUserAgentDefaultValue)
 	assertEqual(t, reflect.DeepEqual(resp.BodyRaw(), body), true)
 }
@@ -485,4 +508,140 @@ func TestTimeout(t *testing.T) {
 
 	assertEqual(t, resp, nil)
 	assertEqual(t, errors.Is(err, ErrRequestTimedOut), true)
+}
+
+func TestStream(t *testing.T) {
+	server := testServer(t)
+	defer server.Close()
+
+	resp, err := NewRequest().
+		SetBaseUrl(server.URL).
+		SetPath("/stream").
+		SetTimeout(10 * time.Second).
+		DoStream(context.Background())
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Close()
+
+	str := ""
+	for {
+		b, err := resp.Recv(128)
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			t.Fatal(err)
+		}
+
+		str += string(b)
+	}
+
+	assertEqual(t, str, "abcdefghijklmnopqrstuvwxyz0123456789")
+}
+
+func TestStreamRecvFunc(t *testing.T) {
+	server := testServer(t)
+	defer server.Close()
+
+	resp, err := NewRequest().
+		SetBaseUrl(server.URL).
+		SetPath("/stream").
+		SetTimeout(10 * time.Second).
+		DoStream(context.Background())
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Close()
+
+	str := ""
+	recvf := func(r *bufio.Reader) error {
+		b := make([]byte, 128)
+		nn, err := r.Read(b)
+		if err != nil {
+			return err
+		}
+
+		str += string(b[:nn])
+		return nil
+	}
+
+	for {
+		err := resp.RecvFunc(recvf)
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			t.Fatal(err)
+		}
+	}
+
+	assertEqual(t, str, "abcdefghijklmnopqrstuvwxyz0123456789")
+}
+
+type sRecv struct {
+	str string
+}
+
+func (s *sRecv) Recv(r *bufio.Reader) error {
+	b := make([]byte, 128)
+	nn, err := r.Read(b)
+	if err != nil {
+		return err
+	}
+
+	s.str += string(b[:nn])
+	return nil
+}
+
+func TestStreamRecvFuncStruct(t *testing.T) {
+	server := testServer(t)
+	defer server.Close()
+
+	resp, err := NewRequest().
+		SetBaseUrl(server.URL).
+		SetPath("/stream").
+		SetTimeout(10 * time.Second).
+		DoStream(context.Background())
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Close()
+
+	s := sRecv{}
+
+	for {
+		err := resp.RecvFunc(s.Recv)
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			t.Fatal(err)
+		}
+	}
+
+	assertEqual(t, s.str, "abcdefghijklmnopqrstuvwxyz0123456789")
+}
+
+func TestError(t *testing.T) {
+	server := testServer(t)
+	defer server.Close()
+
+	resp, err := NewRequest().
+		SetBaseUrl(server.URL).
+		SetPath("/error").
+		Do()
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	respErr := resp.IsError()
+	if respErr == nil {
+		t.Fatal("respErr is nil")
+	}
+	assertEqual(t, respErr.Error(), "error")
 }

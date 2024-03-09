@@ -31,40 +31,54 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
+	"log"
 	"mime/multipart"
 	"net/http"
+	"net/http/httputil"
 	"net/textproto"
 	"net/url"
 	"os"
 	"path"
+	"runtime"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
 type (
+	logger struct {
+		l          *log.Logger
+		flag       atomic.Int32
+		timeFormat atomic.Pointer[string]
+	}
+
 	client struct {
-		client      *http.Client
-		baseUrl     string
-		debug       bool
-		headers     http.Header
-		queryParams url.Values
-		timeout     time.Duration
-		logger      Logger
+		client           *http.Client
+		baseUrl          string
+		debug            bool
+		debugIncludeBody bool
+		headers          http.Header
+		queryParams      url.Values
+		timeout          time.Duration
+		logger           *logger
+		isLogEnabled     bool
 	}
 
 	request struct {
-		client      *client
-		method      string
-		baseUrl     string
-		path        string
-		headers     http.Header
-		queryParams url.Values
-		timeout     time.Duration
-		body        *bytes.Buffer
-		bodyErr     error
-		cancel      context.CancelFunc
-		ctx         context.Context
+		client           *client
+		method           string
+		baseUrl          string
+		path             string
+		headers          http.Header
+		queryParams      url.Values
+		timeout          time.Duration
+		body             *bytes.Buffer
+		bodyErr          error
+		cancel           context.CancelFunc
+		ctx              context.Context
+		debug            bool
+		debugIncludeBody bool
+		isLogEnabled     bool
 	}
 
 	responseHeader struct {
@@ -83,11 +97,6 @@ type (
 	response struct {
 		responseHeader
 		body []byte
-	}
-
-	Logger interface {
-		Debug(msg string, args ...any)
-		Info(msg string, args ...any)
 	}
 
 	ResponseUnmarshaler func(*response) error
@@ -112,17 +121,100 @@ var (
 
 	ErrRequestTimedOut = errors.New("request timed out")
 
-	headerUserAgentDefaultValue = "pingo " + version + " (github.com/mauserzjeh/pingo)"
+	headerUserAgentDefaultValue = pingoWithVersion + " (github.com/mauserzjeh/pingo)"
+
+	pingoWithVersion = pingo + " " + version
 )
 
 const (
+	Fshortfile = 1 << iota
+	Flongfile
+	Ftime
+	FUTC
+
 	ContentTypeJson            = "application/json"
 	ContentTypeXml             = "application/xml"
 	ContentTypeFormUrlEncoded  = "application/x-www-form-urlencoded"
 	ContentTypeTextEventStream = "text/event-stream"
 
-	version = "v2.0.0"
+	version           = "v2.0.0"
+	pingo             = "pingo"
+	defaultTimeFormat = "2006-01-02 15:04:05"
 )
+
+// ---------------------------------------------- //
+// Logger                                         //
+// ---------------------------------------------- //
+
+func newDefaultLogger() *logger {
+	l := &logger{
+		l: log.New(os.Stdout, "", 0),
+	}
+
+	l.setFlags(Ftime)
+	l.setTimeFormat(defaultTimeFormat)
+
+	return l
+}
+
+func (l *logger) setFlags(flag int) {
+	l.flag.Store(int32(flag))
+}
+
+func (l *logger) flags() int {
+	return int(l.flag.Load())
+}
+
+func (l *logger) setTimeFormat(format string) {
+	l.timeFormat.Store(&format)
+}
+
+func (l *logger) timeFmt() string {
+	return *(l.timeFormat.Load())
+}
+
+func (l *logger) setOutput(w io.Writer) {
+	l.l.SetOutput(w)
+}
+
+func (l *logger) log(format string, args ...any) {
+	t := time.Now()
+	flag := l.flags()
+	sb := strings.Builder{}
+
+	// pingo label
+	sb.WriteRune('[')
+	sb.WriteString(pingoWithVersion)
+	sb.WriteRune(']')
+	sb.WriteRune(' ')
+
+	// time
+	if flag&Ftime != 0 {
+		if flag&FUTC != 0 {
+			t = t.UTC()
+		}
+
+		timeFmt := l.timeFmt()
+		sb.WriteString(t.Format(timeFmt))
+		sb.WriteString(" | ")
+	}
+
+	// file + line
+	if flag&(Fshortfile|Flongfile) != 0 {
+		_, file, line, _ := runtime.Caller(5)
+		if flag&Fshortfile != 0 {
+			file = path.Base(file)
+		}
+
+		sb.WriteString(file)
+		sb.WriteRune(':')
+		fmt.Fprintf(&sb, "%d", line)
+		sb.WriteString(" | ")
+	}
+
+	fmt.Fprintf(&sb, format, args...)
+	l.l.Println(sb.String())
+}
 
 // ---------------------------------------------- //
 // Client                                         //
@@ -130,12 +222,11 @@ const (
 
 func newDefaultClient() *client {
 	c := &client{
-		client: &http.Client{},
-		logger: slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-			Level: slog.LevelDebug,
-		})),
-		headers:     make(http.Header),
-		queryParams: make(url.Values),
+		client:       &http.Client{},
+		logger:       newDefaultLogger(),
+		headers:      make(http.Header),
+		queryParams:  make(url.Values),
+		isLogEnabled: true,
 	}
 
 	c.headers.Set(headerUserAgent, headerUserAgentDefaultValue)
@@ -204,29 +295,48 @@ func (c *client) SetTimeout(timeout time.Duration) *client {
 	return c
 }
 
-func (c *client) SetDebug(debug bool) *client {
+func (c *client) SetDebug(debug, includeBody bool) *client {
 	c.debug = debug
+	c.debugIncludeBody = includeBody
 	return c
 }
 
-func (c *client) SetLogger(logger Logger) *client {
-	c.logger = logger
+func (c *client) SetLogEnabled(enable bool) *client {
+	c.isLogEnabled = enable
+	return c
+}
+
+func (c *client) SetLogTimeFormat(layout string) *client {
+	c.logger.setTimeFormat(layout)
+	return c
+}
+
+func (c *client) SetLogOutput(w io.Writer) *client {
+	c.logger.setOutput(w)
+	return c
+}
+
+func (c *client) SetLogFlags(flag int) *client {
+	c.logger.setFlags(flag)
 	return c
 }
 
 func (c *client) NewRequest() *request {
 	return &request{
-		client:      c,
-		method:      http.MethodGet,
-		baseUrl:     c.baseUrl,
-		path:        "",
-		headers:     c.headers,
-		queryParams: c.queryParams,
-		timeout:     c.timeout,
-		body:        nil,
-		bodyErr:     nil,
-		cancel:      nil,
-		ctx:         nil,
+		client:           c,
+		method:           http.MethodGet,
+		baseUrl:          c.baseUrl,
+		path:             "",
+		headers:          c.headers,
+		queryParams:      c.queryParams,
+		timeout:          c.timeout,
+		body:             nil,
+		bodyErr:          nil,
+		cancel:           nil,
+		ctx:              nil,
+		debug:            c.debug,
+		debugIncludeBody: c.debugIncludeBody,
+		isLogEnabled:     c.isLogEnabled,
 	}
 }
 
@@ -236,6 +346,17 @@ func (c *client) NewRequest() *request {
 
 func NewRequest() *request {
 	return defaultClient.NewRequest()
+}
+
+func (r *request) SetDebug(debug, includeBody bool) *request {
+	r.debug = debug
+	r.debugIncludeBody = includeBody
+	return r
+}
+
+func (r *request) SetLogEnabled(enabled bool) *request {
+	r.isLogEnabled = enabled
+	return r
 }
 
 func (r *request) SetMethod(method string) *request {
@@ -392,7 +513,20 @@ func (r *request) BodyMultipartForm(data map[string]any, files ...multipartFormF
 }
 
 func (r *request) do(ctx context.Context) (*http.Response, error) {
+	var (
+		reqDump, resDump []byte
+		now              = time.Now()
+		statusCode       int
+		err              error
+	)
+
 	requestUrl := r.requestUrl()
+
+	defer func() {
+		if err == nil && r.isLogEnabled {
+			r.client.logger.log("%s", createLog(r.method, statusCode, requestUrl, time.Since(now), reqDump, resDump, r.debug))
+		}
+	}()
 
 	requestBody, err := r.requestBody()
 	if err != nil {
@@ -404,6 +538,10 @@ func (r *request) do(ctx context.Context) (*http.Response, error) {
 		return nil, err
 	}
 
+	if r.isLogEnabled && r.debug {
+		reqDump, _ = httputil.DumpRequestOut(req, r.debugIncludeBody)
+	}
+
 	resp, err := r.client.client.Do(req)
 	if err != nil {
 		select {
@@ -413,6 +551,12 @@ func (r *request) do(ctx context.Context) (*http.Response, error) {
 		}
 
 		return nil, err
+	}
+
+	statusCode = resp.StatusCode
+
+	if r.isLogEnabled && r.debug {
+		resDump, _ = httputil.DumpResponse(resp, r.debugIncludeBody)
 	}
 
 	return resp, nil
@@ -528,7 +672,7 @@ func (r *request) createRequest(ctx context.Context, url string, body io.Reader)
 	query := req.URL.Query()
 	for k, vs := range r.queryParams {
 		for _, v := range vs {
-			query.Add(k, v)
+			query.Set(k, v)
 		}
 	}
 
@@ -703,4 +847,67 @@ func addValues[T http.Header | url.Values](src, dst T) {
 			}
 		}
 	}
+}
+
+func formatDump(label string, dump []byte) string {
+	sb := strings.Builder{}
+
+	format := "|  %s  | %s\n"
+
+	sb.WriteString(strings.Repeat("-", len(format)-5))
+	sb.WriteRune('\n')
+
+	// fmt.Fprintf(&sb, format, " ", "")
+
+	ls := bytes.Split(dump, []byte("\n"))
+	for i, line := range ls {
+		c := " "
+		if i <= len(label) && i > 0 {
+			c = string(label[i-1])
+		}
+
+		fmt.Fprintf(&sb, format, c, line)
+	}
+
+	if len(ls)-1 <= len(label) {
+		remainder := label[len(ls)-1:]
+		for _, r := range remainder {
+			fmt.Fprintf(&sb, format, string(r), "")
+		}
+	}
+	fmt.Fprintf(&sb, format, " ", "")
+
+	sb.WriteString(strings.Repeat("-", len(format)-5))
+	sb.WriteRune('\n')
+
+	return sb.String()
+}
+
+func debugLog(reqDump, resDump []byte) string {
+	sb := strings.Builder{}
+
+	sb.WriteRune('\n')
+
+	label := "REQUEST"
+	d := formatDump(label, reqDump)
+	sb.WriteString(d)
+
+	sb.WriteRune('\n')
+
+	label = "RESPONSE"
+	d = formatDump(label, resDump)
+	sb.WriteString(d)
+
+	return sb.String()
+}
+
+func createLog(method string, statusCode int, url string, duration time.Duration, reqDump, resDump []byte, debug bool) string {
+	sb := strings.Builder{}
+	fmt.Fprintf(&sb, "%v | %v | %v | %v", method, statusCode, url, duration)
+
+	if debug {
+		fmt.Fprintf(&sb, "\n%s", debugLog(reqDump, resDump))
+	}
+
+	return sb.String()
 }

@@ -26,14 +26,6 @@ func assertEqual[T comparable](t testing.TB, got, want T) {
 	}
 }
 
-// // assertNotEqual fails if the two values are equal
-// func assertNotEqual[T comparable](t testing.TB, got, want T) {
-// 	t.Helper()
-// 	if got == want {
-// 		t.Errorf("didn't want %v", got)
-// 	}
-// }
-
 func testServer(t *testing.T) *httptest.Server {
 	t.Helper()
 
@@ -46,6 +38,12 @@ func testServer(t *testing.T) *httptest.Server {
 
 	mux.HandleFunc("/error", func(w http.ResponseWriter, r *http.Request) {
 		sendError(w, http.StatusInternalServerError)
+	})
+
+	mux.HandleFunc("/json", func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewEncoder(w).Encode(struct{ Success bool }{Success: true}); err != nil {
+			panic(err)
+		}
 	})
 
 	mux.HandleFunc("/echo", func(w http.ResponseWriter, r *http.Request) {
@@ -134,16 +132,6 @@ func testServer(t *testing.T) *httptest.Server {
 	return server
 }
 
-type customLogger struct{}
-
-func (c customLogger) Debug(msg string, args ...any) {
-	fmt.Printf(msg, args...)
-}
-
-func (c customLogger) Info(msg string, args ...any) {
-	fmt.Printf(msg, args...)
-}
-
 func TestClientSettings(t *testing.T) {
 	c := NewClient()
 
@@ -204,12 +192,26 @@ func TestClientSettings(t *testing.T) {
 	assertEqual(t, c.timeout, timeout)
 
 	debug := true
-	c.SetDebug(debug)
+	debugIncludeBody := true
+	c.SetDebug(debug, debugIncludeBody)
 	assertEqual(t, c.debug, debug)
+	assertEqual(t, c.debugIncludeBody, debugIncludeBody)
 
-	cl := customLogger{}
-	c.SetLogger(cl)
-	assertEqual(t, reflect.DeepEqual(c.logger, cl), true)
+	logEnabled := true
+	c.SetLogEnabled(logEnabled)
+	assertEqual(t, c.isLogEnabled, logEnabled)
+
+	layout := "2006/01/02 15:04:05"
+	c.SetLogTimeFormat(layout)
+	assertEqual(t, c.logger.timeFmt(), layout)
+
+	output := io.Discard
+	c.SetLogOutput(output)
+	assertEqual(t, c.logger.l.Writer(), output)
+
+	flags := Flongfile | Ftime | FUTC
+	c.SetLogFlags(flags)
+	assertEqual(t, c.logger.flags(), flags)
 }
 
 func TestRequestSettings(t *testing.T) {
@@ -296,10 +298,14 @@ func TestJsonRequest(t *testing.T) {
 		Bar: "bar",
 	}
 
-	resp, err := NewRequest().
+	resp, err := NewClient().
+		SetLogFlags(Fshortfile|Ftime|FUTC).
+		NewRequest().
 		SetBaseUrl(server.URL).
 		SetPath("/echo").
 		SetMethod(http.MethodPost).
+		SetQueryParam("key", "value").
+		SetDebug(true, true).
 		BodyJson(r).
 		Do()
 
@@ -332,7 +338,9 @@ func TestRawRequest(t *testing.T) {
 		SetBaseUrl(server.URL).
 		SetPath("/echo").
 		SetMethod(http.MethodPost).
-		SetTimeout(5 * time.Second).
+		SetTimeout(5*time.Second).
+		SetQueryParam("foo", "bar").
+		SetLogEnabled(false).
 		BodyRaw(body).
 		Do()
 
@@ -492,6 +500,24 @@ func TestBodyMultipartForm(t *testing.T) {
 	}
 }
 
+func TestBodyMultipartFormError(t *testing.T) {
+	server := testServer(t)
+	defer server.Close()
+
+	resp, err := NewRequest().
+		SetBaseUrl(server.URL).
+		SetPath("/multipart-form").
+		SetMethod(http.MethodPost).
+		BodyMultipartForm(nil, NewMultipartFormFile("file", "file/does/not/exists")).
+		Do()
+
+	if err == nil {
+		t.Fatal("err is nil")
+	}
+
+	assertEqual(t, resp, nil)
+}
+
 func TestTimeout(t *testing.T) {
 	server := testServer(t)
 	defer server.Close()
@@ -644,4 +670,60 @@ func TestError(t *testing.T) {
 		t.Fatal("respErr is nil")
 	}
 	assertEqual(t, respErr.Error(), "error")
+}
+
+type sUnmarshal struct {
+	Success bool `json:"success"`
+}
+
+func (s *sUnmarshal) Unmarshal(r *response) error {
+	return json.Unmarshal(r.BodyRaw(), &s)
+}
+
+func TestUnmarshal(t *testing.T) {
+	server := testServer(t)
+	defer server.Close()
+
+	resp, err := NewRequest().
+		SetBaseUrl(server.URL).
+		SetPath("/json").
+		Do()
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var s sUnmarshal
+	unmarshalf := func(r *response) error {
+		return json.Unmarshal(r.BodyRaw(), &s)
+	}
+
+	err = resp.Unmarshal(unmarshalf)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	assertEqual(t, s.Success, true)
+}
+
+func TestUnmarshal2(t *testing.T) {
+	server := testServer(t)
+	defer server.Close()
+
+	resp, err := NewRequest().
+		SetBaseUrl(server.URL).
+		SetPath("/json").
+		Do()
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var s sUnmarshal
+	err = resp.Unmarshal(s.Unmarshal)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	assertEqual(t, s.Success, true)
 }

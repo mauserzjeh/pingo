@@ -192,10 +192,10 @@ func TestClientSettings(t *testing.T) {
 	assertEqual(t, c.timeout, timeout)
 
 	debug := true
-	debugIncludeBody := true
-	c.SetDebug(debug, debugIncludeBody)
+	debugBody := true
+	c.SetDebug(debug, debugBody)
 	assertEqual(t, c.debug, debug)
-	assertEqual(t, c.debugIncludeBody, debugIncludeBody)
+	assertEqual(t, c.debugBody, debugBody)
 
 	logEnabled := true
 	c.SetLogEnabled(logEnabled)
@@ -209,7 +209,7 @@ func TestClientSettings(t *testing.T) {
 	c.SetLogOutput(output)
 	assertEqual(t, c.logger.l.Writer(), output)
 
-	flags := Flongfile | Ftime | FUTC
+	flags := Flongfile | Ftime | FtimeUTC
 	c.SetLogFlags(flags)
 	assertEqual(t, c.logger.flags(), flags)
 }
@@ -269,6 +269,16 @@ func TestRequestSettings(t *testing.T) {
 	timeout := 5 * time.Second
 	r.SetTimeout(timeout)
 	assertEqual(t, r.timeout, timeout)
+
+	debug := true
+	debugBody := true
+	r.SetDebug(debug, debugBody)
+	assertEqual(t, r.debug, debug)
+	assertEqual(t, r.debugBody, debugBody)
+
+	logEnabled := true
+	r.SetLogEnabled(logEnabled)
+	assertEqual(t, r.isLogEnabled, logEnabled)
 }
 
 func TestEmptyRequest(t *testing.T) {
@@ -299,7 +309,7 @@ func TestJsonRequest(t *testing.T) {
 	}
 
 	resp, err := NewClient().
-		SetLogFlags(Fshortfile|Ftime|FUTC).
+		SetLogFlags(Fshortfile|Ftime|FtimeUTC).
 		NewRequest().
 		SetBaseUrl(server.URL).
 		SetPath("/echo").

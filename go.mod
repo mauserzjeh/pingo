@@ -1,3 +1,3 @@
-module github.com/mauserzjeh/pingo
+module github.com/mauserzjeh/pingo/v2
 
-go 1.18
+go 1.22

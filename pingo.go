@@ -47,15 +47,15 @@ import (
 
 type (
 
-	// logger is the internal logger used by the package
-	logger struct {
+	// Logger is the internal logger used by the package
+	Logger struct {
 		l          *log.Logger            // underlying [log.Logger]
 		flag       atomic.Int32           // logging flags
 		timeFormat atomic.Pointer[string] // format of the time part when [Ftime] flag is provided
 	}
 
-	// client is the client used by the package
-	client struct {
+	// Client is the client used by the package
+	Client struct {
 		client       *http.Client  // underlying [net/http.Client]
 		baseUrl      string        // base URL for the client
 		debug        bool          // debug mode
@@ -63,13 +63,13 @@ type (
 		headers      http.Header   // headers for the client
 		queryParams  url.Values    // query parameters for the client
 		timeout      time.Duration // timeout for the client
-		logger       *logger       // logger used by the client
+		logger       *Logger       // logger used by the client
 		isLogEnabled bool          // whether logging is enabled or disabled in this client
 	}
 
-	// request is the request created by calling [NewRequest]
-	request struct {
-		client       *client            // the client the request was created on
+	// Request is the request created by calling [NewRequest]
+	Request struct {
+		client       *Client            // the client the request was created on
 		method       string             // method of the request e.g: "GET", "POST", "PUT"
 		baseUrl      string             // base URL for the request
 		path         string             // path of the request
@@ -92,22 +92,22 @@ type (
 		headers    http.Header // headers of the response
 	}
 
-	// responseStream is a streamed response
-	responseStream struct {
+	// ResponseStream is a streamed response
+	ResponseStream struct {
 		responseHeader                    // response header info
 		cancel         context.CancelFunc // [context.CancelFunc] to cancel any resources associated with the request/response
 		reader         *bufio.Reader      // [bufio.Reader] to read the response from
 		response       *http.Response     // the original [net/http.Response]
 	}
 
-	// response is the default response
-	response struct {
+	// Response is the default response
+	Response struct {
 		responseHeader        // response header info
 		body           []byte // response body
 	}
 
 	// ResponseUnmarshaler is a function that can be used to unmarshal a response
-	ResponseUnmarshaler func(r *response) error
+	ResponseUnmarshaler func(r *Response) error
 
 	// StreamReceiver is a function that can be used to read from a streamed response
 	StreamReceiver func(r *bufio.Reader) error
@@ -146,7 +146,7 @@ const (
 	pingo             = "pingo"
 	defaultTimeFormat = "2006-01-02 15:04:05"
 
-	// logger flags
+	// Logger flags
 
 	Fshortfile = 1 << iota // short file name and line number: file.go:123
 	Flongfile              // full file name and line number: a/b/c/file.go:123
@@ -166,8 +166,8 @@ const (
 // ---------------------------------------------- //
 
 // newDefaultLogger creates a new default logger
-func newDefaultLogger() *logger {
-	l := &logger{
+func newDefaultLogger() *Logger {
+	l := &Logger{
 		l: log.New(os.Stdout, "", 0),
 	}
 
@@ -178,32 +178,32 @@ func newDefaultLogger() *logger {
 }
 
 // setFlags sets the flag value
-func (l *logger) setFlags(flag int) {
+func (l *Logger) setFlags(flag int) {
 	l.flag.Store(int32(flag))
 }
 
 // flags returns the flag value
-func (l *logger) flags() int {
+func (l *Logger) flags() int {
 	return int(l.flag.Load())
 }
 
 // setTimeFormat sets the time format
-func (l *logger) setTimeFormat(format string) {
+func (l *Logger) setTimeFormat(format string) {
 	l.timeFormat.Store(&format)
 }
 
 // timeFmt returns the time format
-func (l *logger) timeFmt() string {
+func (l *Logger) timeFmt() string {
 	return *(l.timeFormat.Load())
 }
 
 // setOutput sets the output
-func (l *logger) setOutput(w io.Writer) {
+func (l *Logger) setOutput(w io.Writer) {
 	l.l.SetOutput(w)
 }
 
 // log writes the log message
-func (l *logger) log(format string, args ...any) {
+func (l *Logger) log(format string, args ...any) {
 	t := time.Now()
 	flag := l.flags()
 	sb := strings.Builder{}
@@ -247,8 +247,8 @@ func (l *logger) log(format string, args ...any) {
 // ---------------------------------------------- //
 
 // newDefaultClient creates a new default client
-func newDefaultClient() *client {
-	c := &client{
+func newDefaultClient() *Client {
+	c := &Client{
 		client:       &http.Client{},
 		logger:       newDefaultLogger(),
 		headers:      make(http.Header),
@@ -262,112 +262,112 @@ func newDefaultClient() *client {
 }
 
 // NewClient creates a new client with the default settings
-func NewClient() *client {
+func NewClient() *Client {
 	c := newDefaultClient()
 
 	return c
 }
 
 // SetClient sets the underlying [net/http.Client]
-func (c *client) SetClient(client *http.Client) *client {
+func (c *Client) SetClient(client *http.Client) *Client {
 	c.client = client
 	return c
 }
 
 // SetBaseUrl sets the base URL
-func (c *client) SetBaseUrl(baseUrl string) *client {
+func (c *Client) SetBaseUrl(baseUrl string) *Client {
 	c.baseUrl = baseUrl
 	return c
 }
 
 // SetHeaders sets the header values
-func (c *client) SetHeaders(headers http.Header) *client {
+func (c *Client) SetHeaders(headers http.Header) *Client {
 	setValues(headers, c.headers)
 	return c
 }
 
 // SetHeader sets a single header value
-func (c *client) SetHeader(key, value string) *client {
+func (c *Client) SetHeader(key, value string) *Client {
 	c.headers.Set(key, value)
 	return c
 }
 
 // AddHeaders adds the header values
-func (c *client) AddHeaders(headers http.Header) *client {
+func (c *Client) AddHeaders(headers http.Header) *Client {
 	addValues(headers, c.headers)
 	return c
 }
 
 // AddHeader adds a single header value
-func (c *client) AddHeader(key, value string) *client {
+func (c *Client) AddHeader(key, value string) *Client {
 	c.headers.Add(key, value)
 	return c
 }
 
 // SetQueryParams sets the query parameters
-func (c *client) SetQueryParams(queryParams url.Values) *client {
+func (c *Client) SetQueryParams(queryParams url.Values) *Client {
 	setValues(queryParams, c.queryParams)
 	return c
 }
 
 // SetQueryParam sets a single query parameter
-func (c *client) SetQueryParam(key, value string) *client {
+func (c *Client) SetQueryParam(key, value string) *Client {
 	c.queryParams.Set(key, value)
 	return c
 }
 
 // AddQueryParams adds the query parameters
-func (c *client) AddQueryParams(queryParams url.Values) *client {
+func (c *Client) AddQueryParams(queryParams url.Values) *Client {
 	addValues(queryParams, c.queryParams)
 	return c
 }
 
 // AddQueryParam adds a single query parameter
-func (c *client) AddQueryParam(key, value string) *client {
+func (c *Client) AddQueryParam(key, value string) *Client {
 	c.queryParams.Add(key, value)
 	return c
 }
 
 // SetTimeout sets the timeout
-func (c *client) SetTimeout(timeout time.Duration) *client {
+func (c *Client) SetTimeout(timeout time.Duration) *Client {
 	c.timeout = timeout
 	return c
 }
 
 // SetDebug sets the debug mode
-func (c *client) SetDebug(debug, includeBody bool) *client {
+func (c *Client) SetDebug(debug, includeBody bool) *Client {
 	c.debug = debug
 	c.debugBody = includeBody
 	return c
 }
 
 // SetLogEnabled sets the log mode
-func (c *client) SetLogEnabled(enable bool) *client {
+func (c *Client) SetLogEnabled(enable bool) *Client {
 	c.isLogEnabled = enable
 	return c
 }
 
 // SetLogTimeFormat sets the log time format if [Ftime] flag is given
-func (c *client) SetLogTimeFormat(layout string) *client {
+func (c *Client) SetLogTimeFormat(layout string) *Client {
 	c.logger.setTimeFormat(layout)
 	return c
 }
 
 // SetLogOutput sets the log output to the given [io.Writer]
-func (c *client) SetLogOutput(w io.Writer) *client {
+func (c *Client) SetLogOutput(w io.Writer) *Client {
 	c.logger.setOutput(w)
 	return c
 }
 
 // SetLogFlags sets the log flags
-func (c *client) SetLogFlags(flag int) *client {
+func (c *Client) SetLogFlags(flag int) *Client {
 	c.logger.setFlags(flag)
 	return c
 }
 
 // NewRequest creates a new request
-func (c *client) NewRequest() *request {
-	return &request{
+func (c *Client) NewRequest() *Request {
+	return &Request{
 		client:       c,
 		method:       http.MethodGet,
 		baseUrl:      c.baseUrl,
@@ -389,27 +389,27 @@ func (c *client) NewRequest() *request {
 // Request                                        //
 // ---------------------------------------------- //
 
-// NewRequest creates a new request
-func NewRequest() *request {
+// NewRequest creates a new request on the default client
+func NewRequest() *Request {
 	return defaultClient.NewRequest()
 }
 
 // SetDebug sets the debug mode
-func (r *request) SetDebug(debug, includeBody bool) *request {
+func (r *Request) SetDebug(debug, includeBody bool) *Request {
 	r.debug = debug
 	r.debugBody = includeBody
 	return r
 }
 
 // SetLogEnabled sets the log mode
-func (r *request) SetLogEnabled(enabled bool) *request {
+func (r *Request) SetLogEnabled(enabled bool) *Request {
 	r.isLogEnabled = enabled
 	return r
 }
 
 // SetMethod sets the request method
 // e.g.: "GET", "POST", "PUT"
-func (r *request) SetMethod(method string) *request {
+func (r *Request) SetMethod(method string) *Request {
 	if method != "" {
 		r.method = method
 	}
@@ -417,74 +417,74 @@ func (r *request) SetMethod(method string) *request {
 }
 
 // SetBaseUrl sets the base URL
-func (r *request) SetBaseUrl(baseUrl string) *request {
+func (r *Request) SetBaseUrl(baseUrl string) *Request {
 	r.baseUrl = baseUrl
 	return r
 }
 
 // SetPath sets the request path
-func (r *request) SetPath(path string) *request {
+func (r *Request) SetPath(path string) *Request {
 	r.path = path
 	return r
 }
 
 // SetHeaders sets the header values
-func (r *request) SetHeaders(headers http.Header) *request {
+func (r *Request) SetHeaders(headers http.Header) *Request {
 	setValues(headers, r.headers)
 	return r
 }
 
 // SetHeader sets a single header value
-func (r *request) SetHeader(key, value string) *request {
+func (r *Request) SetHeader(key, value string) *Request {
 	r.headers.Set(key, value)
 	return r
 }
 
 // AddHeaders adds the header values
-func (r *request) AddHeaders(headers http.Header) *request {
+func (r *Request) AddHeaders(headers http.Header) *Request {
 	addValues(headers, r.headers)
 	return r
 }
 
 // AddHeader adds a single header value
-func (r *request) AddHeader(key, value string) *request {
+func (r *Request) AddHeader(key, value string) *Request {
 	r.headers.Add(key, value)
 	return r
 }
 
 // SetQueryParams sets the query parameters
-func (r *request) SetQueryParams(queryParams url.Values) *request {
+func (r *Request) SetQueryParams(queryParams url.Values) *Request {
 	setValues(queryParams, r.queryParams)
 	return r
 }
 
 // SetQueryParam sets a single query parameter
-func (r *request) SetQueryParam(key, value string) *request {
+func (r *Request) SetQueryParam(key, value string) *Request {
 	r.queryParams.Set(key, value)
 	return r
 }
 
 // AddQueryParams adds the query parameters
-func (r *request) AddQueryParams(queryParams url.Values) *request {
+func (r *Request) AddQueryParams(queryParams url.Values) *Request {
 	addValues(queryParams, r.queryParams)
 	return r
 }
 
 // AddQueryParam adds a single query parameter
-func (r *request) AddQueryParam(key, value string) *request {
+func (r *Request) AddQueryParam(key, value string) *Request {
 	r.queryParams.Add(key, value)
 	return r
 }
 
 // SetTimeout sets the timeout
-func (r *request) SetTimeout(timeout time.Duration) *request {
+func (r *Request) SetTimeout(timeout time.Duration) *Request {
 	r.timeout = timeout
 	return r
 }
 
 // BodyJson prepares the body as a JSON request with the given data.
 // Content-Type header is automatically set to "application/json"
-func (r *request) BodyJson(data any) *request {
+func (r *Request) BodyJson(data any) *Request {
 	r.resetBody()
 	r.SetHeader(headerContentType, ContentTypeJson)
 
@@ -500,7 +500,7 @@ func (r *request) BodyJson(data any) *request {
 
 // BodyXml prepares the body as an XML request with the given data.
 // Content-Type header is automatically set to "application/xml"
-func (r *request) BodyXml(data any) *request {
+func (r *Request) BodyXml(data any) *Request {
 	r.resetBody()
 	r.SetHeader(headerContentType, ContentTypeXml)
 
@@ -516,7 +516,7 @@ func (r *request) BodyXml(data any) *request {
 
 // BodyFormUrlEncoded prepares the body as a form URL encoded request with the given data.
 // Content-Type header is automatically set to "application/x-www-form-urlencoded"
-func (r *request) BodyFormUrlEncoded(data url.Values) *request {
+func (r *Request) BodyFormUrlEncoded(data url.Values) *Request {
 	r.resetBody()
 	r.SetHeader(headerContentType, ContentTypeFormUrlEncoded)
 
@@ -525,7 +525,7 @@ func (r *request) BodyFormUrlEncoded(data url.Values) *request {
 }
 
 // BodyCustom prepares the body with the given callback function
-func (r *request) BodyCustom(f func() (*bytes.Buffer, error)) *request {
+func (r *Request) BodyCustom(f func() (*bytes.Buffer, error)) *Request {
 	r.resetBody()
 
 	body, err := f()
@@ -539,7 +539,7 @@ func (r *request) BodyCustom(f func() (*bytes.Buffer, error)) *request {
 }
 
 // BodyRaw prepares the body with the given raw data bytes
-func (r *request) BodyRaw(data []byte) *request {
+func (r *Request) BodyRaw(data []byte) *Request {
 	r.resetBody()
 	r.body = bytes.NewBuffer(data)
 	return r
@@ -548,7 +548,7 @@ func (r *request) BodyRaw(data []byte) *request {
 // BodyMultipartForm prepares the body as a multipartform request with the given data and files.
 // Content-Type header is automatically set to "multipart/form-data" with the proper boundary.
 // Use [NewMultipartFormFile] or [NewMultipartFormFileReader] to pass files for file upload
-func (r *request) BodyMultipartForm(data map[string]any, files ...multipartFormFile) *request {
+func (r *Request) BodyMultipartForm(data map[string]any, files ...multipartFormFile) *Request {
 	r.resetBody()
 	body := &bytes.Buffer{}
 	w := multipart.NewWriter(body)
@@ -585,7 +585,7 @@ func (r *request) BodyMultipartForm(data map[string]any, files ...multipartFormF
 }
 
 // do performs the request with the given [context.Context]
-func (r *request) do(ctx context.Context) (*http.Response, error) {
+func (r *Request) do(ctx context.Context) (*http.Response, error) {
 	var (
 		reqDump, resDump []byte
 		now              = time.Now()
@@ -636,7 +636,7 @@ func (r *request) do(ctx context.Context) (*http.Response, error) {
 }
 
 // DoCtx performs the request with the given [context.Context] and returns a response
-func (r *request) DoCtx(ctx context.Context) (*response, error) {
+func (r *Request) DoCtx(ctx context.Context) (*Response, error) {
 	resp, err := r.do(ctx)
 	if err != nil {
 		return nil, err
@@ -651,7 +651,7 @@ func (r *request) DoCtx(ctx context.Context) (*response, error) {
 		return nil, err
 	}
 
-	return &response{
+	return &Response{
 		responseHeader: responseHeader{
 			status:     resp.Status,
 			statusCode: resp.StatusCode,
@@ -662,12 +662,12 @@ func (r *request) DoCtx(ctx context.Context) (*response, error) {
 }
 
 // Do performs the request using [context.Background]
-func (r *request) Do() (*response, error) {
+func (r *Request) Do() (*Response, error) {
 	return r.DoCtx(context.Background())
 }
 
 // DoStream performs a request using the given [context.Context] and returns a streaming response
-func (r *request) DoStream(ctx context.Context) (*responseStream, error) {
+func (r *Request) DoStream(ctx context.Context) (*ResponseStream, error) {
 	r.headers.Set(headerAccept, ContentTypeTextEventStream)
 	r.headers.Set(headerCacheControl, "no-cache")
 	r.headers.Set(headerConnection, "keep-alive")
@@ -677,7 +677,7 @@ func (r *request) DoStream(ctx context.Context) (*responseStream, error) {
 		return nil, err
 	}
 
-	return &responseStream{
+	return &ResponseStream{
 		responseHeader: responseHeader{
 			status:     resp.Status,
 			statusCode: resp.StatusCode,
@@ -690,7 +690,7 @@ func (r *request) DoStream(ctx context.Context) (*responseStream, error) {
 }
 
 // requestUrl creates the request url
-func (r *request) requestUrl() string {
+func (r *Request) requestUrl() string {
 	b := strings.Builder{}
 
 	baseUrl := strings.TrimRight(r.baseUrl, "/")
@@ -712,7 +712,7 @@ func (r *request) requestUrl() string {
 }
 
 // requestBody creates the request body
-func (r *request) requestBody() (io.Reader, error) {
+func (r *Request) requestBody() (io.Reader, error) {
 	if r.bodyErr != nil {
 		return nil, r.bodyErr
 	}
@@ -725,7 +725,7 @@ func (r *request) requestBody() (io.Reader, error) {
 }
 
 // createRequest creates a [net/http.Request]
-func (r *request) createRequest(ctx context.Context, url string, body io.Reader) (*http.Request, error) {
+func (r *Request) createRequest(ctx context.Context, url string, body io.Reader) (*http.Request, error) {
 	var (
 		req  *http.Request
 		err  error
@@ -761,7 +761,7 @@ func (r *request) createRequest(ctx context.Context, url string, body io.Reader)
 }
 
 // resetBody resets the request body and bodyErr if subsequent SetBody* functions are called on the request
-func (r *request) resetBody() {
+func (r *Request) resetBody() {
 	r.body = nil
 	r.bodyErr = nil
 }
@@ -795,18 +795,18 @@ func (r *responseHeader) GetHeader(key string) string {
 // ---------------------------------------------- //
 
 // BodyRaw returns the response body as a byte slice
-func (r *response) BodyRaw() []byte {
+func (r *Response) BodyRaw() []byte {
 	return r.body
 }
 
 // BodyString returns the response body as string
-func (r *response) BodyString() string {
+func (r *Response) BodyString() string {
 	return string(r.body)
 }
 
 // IsError returns a non nil error if the response is considered as an error based on the status code.
 // The error's text will be the response body
-func (r *response) IsError() error {
+func (r *Response) IsError() error {
 	if r.statusCode < 200 || r.statusCode >= 400 {
 		return fmt.Errorf("%s", r.body)
 	}
@@ -816,7 +816,7 @@ func (r *response) IsError() error {
 
 // Unmarshal is a convenience method that can receive a [ResponseUnmarshaler] callback
 // function that performs the unmarshalling of the response body
-func (r *response) Unmarshal(u ResponseUnmarshaler) error {
+func (r *Response) Unmarshal(u ResponseUnmarshaler) error {
 	return u(r)
 }
 
@@ -826,12 +826,12 @@ func (r *response) Unmarshal(u ResponseUnmarshaler) error {
 
 // RecvFunc can receive a [StreamReceiver] callback function that performs
 // the stream reading of the streamed response body
-func (r *responseStream) RecvFunc(sr StreamReceiver) error {
+func (r *ResponseStream) RecvFunc(sr StreamReceiver) error {
 	return sr(r.reader)
 }
 
 // Recv reads up to n bytes from a streamed response body
-func (r *responseStream) Recv(n uint) ([]byte, error) {
+func (r *ResponseStream) Recv(n uint) ([]byte, error) {
 	b := make([]byte, n)
 	nn, err := r.reader.Read(b)
 	if err != nil {
@@ -842,7 +842,7 @@ func (r *responseStream) Recv(n uint) ([]byte, error) {
 
 // Close closes the streamed response body and additionally frees up any
 // resources associated with the [context.Context] used to perform the streamed request
-func (r *responseStream) Close() {
+func (r *ResponseStream) Close() {
 	r.response.Body.Close()
 	if r.cancel != nil {
 		r.cancel()

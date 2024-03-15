@@ -686,7 +686,7 @@ type sUnmarshal struct {
 	Success bool `json:"success"`
 }
 
-func (s *sUnmarshal) Unmarshal(r *response) error {
+func (s *sUnmarshal) Unmarshal(r *Response) error {
 	return json.Unmarshal(r.BodyRaw(), &s)
 }
 
@@ -704,7 +704,7 @@ func TestUnmarshal(t *testing.T) {
 	}
 
 	var s sUnmarshal
-	unmarshalf := func(r *response) error {
+	unmarshalf := func(r *Response) error {
 		return json.Unmarshal(r.BodyRaw(), &s)
 	}
 

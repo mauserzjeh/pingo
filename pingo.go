@@ -47,8 +47,8 @@ import (
 
 type (
 
-	// Logger is the internal logger used by the package
-	Logger struct {
+	// logger is the internal logger used by the package
+	logger struct {
 		l          *log.Logger            // underlying [log.Logger]
 		flag       atomic.Int32           // logging flags
 		timeFormat atomic.Pointer[string] // format of the time part when [Ftime] flag is provided
@@ -63,7 +63,7 @@ type (
 		headers      http.Header   // headers for the client
 		queryParams  url.Values    // query parameters for the client
 		timeout      time.Duration // timeout for the client
-		logger       *Logger       // logger used by the client
+		logger       *logger       // logger used by the client
 		isLogEnabled bool          // whether logging is enabled or disabled in this client
 	}
 
@@ -106,6 +106,12 @@ type (
 		body           []byte // response body
 	}
 
+	// ResponseError holds data of response that is considered to be an error
+	ResponseError struct {
+		responseHeader        // response header info
+		body           []byte // response body
+	}
+
 	// ResponseUnmarshaler is a function that can be used to unmarshal a response
 	ResponseUnmarshaler func(r *Response) error
 
@@ -142,7 +148,7 @@ var (
 )
 
 const (
-	version           = "v2.0.0"
+	version           = "v2.1.0"
 	pingo             = "pingo"
 	defaultTimeFormat = "2006-01-02 15:04:05"
 
@@ -166,8 +172,8 @@ const (
 // ---------------------------------------------- //
 
 // newDefaultLogger creates a new default logger
-func newDefaultLogger() *Logger {
-	l := &Logger{
+func newDefaultLogger() *logger {
+	l := &logger{
 		l: log.New(os.Stdout, "", 0),
 	}
 
@@ -178,32 +184,32 @@ func newDefaultLogger() *Logger {
 }
 
 // setFlags sets the flag value
-func (l *Logger) setFlags(flag int) {
+func (l *logger) setFlags(flag int) {
 	l.flag.Store(int32(flag))
 }
 
 // flags returns the flag value
-func (l *Logger) flags() int {
+func (l *logger) flags() int {
 	return int(l.flag.Load())
 }
 
 // setTimeFormat sets the time format
-func (l *Logger) setTimeFormat(format string) {
+func (l *logger) setTimeFormat(format string) {
 	l.timeFormat.Store(&format)
 }
 
 // timeFmt returns the time format
-func (l *Logger) timeFmt() string {
+func (l *logger) timeFmt() string {
 	return *(l.timeFormat.Load())
 }
 
 // setOutput sets the output
-func (l *Logger) setOutput(w io.Writer) {
+func (l *logger) setOutput(w io.Writer) {
 	l.l.SetOutput(w)
 }
 
 // log writes the log message
-func (l *Logger) log(format string, args ...any) {
+func (l *logger) log(format string, args ...any) {
 	t := time.Now()
 	flag := l.flags()
 	sb := strings.Builder{}
@@ -808,7 +814,10 @@ func (r *Response) BodyString() string {
 // The error's text will be the response body
 func (r *Response) IsError() error {
 	if r.statusCode < 200 || r.statusCode >= 400 {
-		return fmt.Errorf("%s", r.body)
+		return &ResponseError{
+			responseHeader: r.responseHeader,
+			body:           r.body,
+		}
 	}
 
 	return nil
@@ -818,6 +827,25 @@ func (r *Response) IsError() error {
 // function that performs the unmarshalling of the response body
 func (r *Response) Unmarshal(u ResponseUnmarshaler) error {
 	return u(r)
+}
+
+// ---------------------------------------------- //
+// ResponseError                                  //
+// ---------------------------------------------- //
+
+// Error implements the error interface
+func (r ResponseError) Error() string {
+	return fmt.Sprintf("[%v] %s", r.status, r.body)
+}
+
+// BodyRaw returns the response body as a byte slice
+func (r *ResponseError) BodyRaw() []byte {
+	return r.body
+}
+
+// BodyString returns the response body as string
+func (r *ResponseError) BodyString() string {
+	return string(r.body)
 }
 
 // ---------------------------------------------- //

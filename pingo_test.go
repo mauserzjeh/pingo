@@ -679,7 +679,14 @@ func TestError(t *testing.T) {
 	if respErr == nil {
 		t.Fatal("respErr is nil")
 	}
-	assertEqual(t, respErr.Error(), "error")
+
+	var e *ResponseError
+	assertEqual(t, errors.As(respErr, &e), true)
+	assertEqual(t, e.BodyString(), "error")
+	assertEqual(t, bytes.Equal(e.BodyRaw(), []byte("error")), true)
+	assertEqual(t, e.StatusCode(), http.StatusInternalServerError)
+	assertEqual(t, e.Error(), "[500 Internal Server Error] error")
+
 }
 
 type sUnmarshal struct {

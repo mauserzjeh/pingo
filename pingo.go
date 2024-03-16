@@ -100,7 +100,7 @@ type (
 		response       *http.Response     // the original [net/http.Response]
 	}
 
-	// Response is the default response
+	// Response holds the response data
 	Response struct {
 		responseHeader        // response header info
 		body           []byte // response body
@@ -110,6 +110,12 @@ type (
 	ResponseError struct {
 		responseHeader        // response header info
 		body           []byte // response body
+	}
+
+	// AsyncResponse is a structure holding response data for async request
+	AsyncResponse struct {
+		Response *Response
+		Err      error
 	}
 
 	// ResponseUnmarshaler is a function that can be used to unmarshal a response
@@ -148,7 +154,7 @@ var (
 )
 
 const (
-	version           = "v2.1.0"
+	version           = "v2.2.0"
 	pingo             = "pingo"
 	defaultTimeFormat = "2006-01-02 15:04:05"
 
@@ -670,6 +676,29 @@ func (r *Request) DoCtx(ctx context.Context) (*Response, error) {
 // Do performs the request using [context.Background]
 func (r *Request) Do() (*Response, error) {
 	return r.DoCtx(context.Background())
+}
+
+// DoAsyncCtx performs an async request with the given [context.Context].
+// It returns an [AsyncResponse] channel which will receive the response when the request completes
+func (r *Request) DoAsyncCtx(ctx context.Context) <-chan AsyncResponse {
+	asyncResp := make(chan AsyncResponse, 1)
+
+	go func() {
+		resp, err := r.DoCtx(ctx)
+		asyncResp <- AsyncResponse{
+			Response: resp,
+			Err:      err,
+		}
+		close(asyncResp)
+	}()
+
+	return asyncResp
+}
+
+// DoAsync performs an async request using [context.Background].
+// It returns an [AsyncResponse] channel which will receive the response when the request completes
+func (r *Request) DoAsync() <-chan AsyncResponse {
+	return r.DoAsyncCtx(context.Background())
 }
 
 // DoStream performs a request using the given [context.Context] and returns a streaming response

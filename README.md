@@ -12,7 +12,8 @@ Pingo is a general purpose, high level request library implemented in Go. It is 
 - Logging and debugging options
 - Reusable clients
 - Tweak options both at client and request level
-- Convenient methods to send raw, JSON, XML, form URL encoded, multipart form requests or use your own callback function to create the request body
+- Convenient methods to send raw, JSON, XML, form URL encoded, multipart form requests or provide a callback function to create the request body
+- Async requests
 - Easily access response headers and body
 - Streamed response support
 

@@ -447,6 +447,8 @@ func TestCustomRequest(t *testing.T) {
 	assertEqual(t, resp.StatusCode(), http.StatusOK)
 	assertEqual(t, resp.BodyString(), b)
 
+	// ----------------------------------------------------
+
 	e := "yikes"
 	resp, err = NewRequest().
 		SetBaseUrl(server.URL).
@@ -743,4 +745,61 @@ func TestUnmarshal2(t *testing.T) {
 	}
 
 	assertEqual(t, s.Success, true)
+}
+
+func TestAsyncRequest(t *testing.T) {
+	server := testServer(t)
+	defer server.Close()
+
+	await := NewRequest().
+		SetBaseUrl(server.URL).
+		SetPath("/ping").
+		DoAsync()
+
+	result := <-await
+
+	if result.Err != nil {
+		t.Fatal(result.Err)
+	}
+	assertEqual(t, result.Response.StatusCode(), http.StatusOK)
+	assertEqual(t, result.Response.BodyString(), "pong")
+
+	// ----------------------------------------------------
+
+	await = NewRequest().
+		SetBaseUrl(server.URL).
+		SetPath("/timeout").
+		SetTimeout(500 * time.Millisecond).
+		DoAsync()
+
+	result = <-await
+	if result.Err == nil {
+		t.Fatal("err is nil")
+	}
+
+	assertEqual(t, result.Response, nil)
+	assertEqual(t, errors.Is(result.Err, ErrRequestTimedOut), true)
+
+	// ----------------------------------------------------
+
+	await = NewRequest().
+		SetBaseUrl(server.URL).
+		SetPath("/error").
+		DoAsync()
+
+	result = <-await
+
+	if result.Err != nil {
+		t.Fatal(result.Err)
+	}
+
+	respErr := result.Response.IsError()
+	if respErr == nil {
+		t.Fatal("respErr is nil")
+	}
+
+	var e *ResponseError
+	assertEqual(t, errors.As(respErr, &e), true)
+	assertEqual(t, e.BodyString(), "error")
+	assertEqual(t, e.StatusCode(), http.StatusInternalServerError)
 }

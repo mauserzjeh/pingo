@@ -114,8 +114,8 @@ type (
 
 	// AsyncResponse is a structure holding response data for async request
 	AsyncResponse struct {
-		Response *Response
-		Err      error
+		Response *Response // response data
+		Err      error     // error of the request
 	}
 
 	// ResponseUnmarshaler is a function that can be used to unmarshal a response

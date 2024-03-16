@@ -840,7 +840,7 @@ func (r *Response) BodyString() string {
 }
 
 // IsError returns a non nil error if the response is considered as an error based on the status code.
-// The error's text will be the response body
+// The error's type will be [*ResponseError]
 func (r *Response) IsError() error {
 	if r.statusCode < 200 || r.statusCode >= 400 {
 		return &ResponseError{
